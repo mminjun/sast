@@ -1,0 +1,13 @@
+# OS
+Thumbs.db
+Desktop.ini
+
+# 에디터
+.vscode/
+
+# 의존성 
+node_modules/
+
+# 환경변수·비밀값
+.env
+*.local
