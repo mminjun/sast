@@ -5,9 +5,9 @@
 ## SFR (시스템 기능)
 | 번호 | 이름 | 상태 | 구현 위치 | 비고 |
 |---|---|---|---|---|
-| SFR-001 | 사용자 로그인 | ⬜ | accounts | |
-| SFR-002 | 인증 수단 발급 | ⬜ | accounts | |
-| SFR-003 | 역할 기반 접근 제어 | ⬜ | accounts | 관리자/일반 2역할 |
+| SFR-001 | 사용자 로그인 | ✅ | accounts/urls.py `POST /api/auth/login/` | 이메일+비밀번호, 커스텀 User |
+| SFR-002 | 인증 수단 발급 | ✅ | accounts (simplejwt) | JWT access/refresh, logout 시 blacklist |
+| SFR-003 | 역할 기반 접근 제어 | ✅ | accounts/permissions.py `IsAdminRole` | 관리자/일반 2역할, DB 값으로 재검증 |
 | SFR-004 | 분석 프로젝트 관리 | ⬜ | projects | 삭제는 비목표 |
 | SFR-005 | 프로젝트 사용자 할당 | ⬜ | projects | |
 | SFR-006 | 프로젝트 조회 범위 | ⬜ | projects | |
@@ -27,7 +27,7 @@
 | 번호 | 이름 | 상태 | 구현 위치 | 비고 |
 |---|---|---|---|---|
 | DAR-001 | 데이터 저장소 | ✅ | docker-compose.yml (PG16) + config/settings.py | Django→PG 접속 확인(16.15). 테이블은 커스텀 User 확정 후 첫 migrate |
-| DAR-002 | 사용자 데이터 | ⬜ | accounts/models | |
+| DAR-002 | 사용자 데이터 | ✅ | accounts/models.py `User` | 이메일 unique, role, 첫 migrate 완료 |
 | DAR-003 | 프로젝트 데이터 | ⬜ | projects/models | |
 | DAR-004 | 프로젝트 권한 데이터 | ⬜ | projects/models | 연결 테이블 |
 | DAR-005 | 분석 실행 데이터 | ⬜ | analysis/models | |
@@ -40,10 +40,10 @@
 ## SEC (보안)
 | 번호 | 이름 | 상태 | 구현 위치 | 비고 |
 |---|---|---|---|---|
-| SEC-001 | 비밀번호 보호 | ⬜ | accounts | bcrypt |
-| SEC-002 | 보호 기능 인증 | ⬜ | accounts | |
-| SEC-003 | 관리자 기능 통제 | ⬜ | 전체 | |
-| SEC-004 | 일반 사용자 권한 통제 | ⬜ | 전체 | 읽기 전용 |
+| SEC-001 | 비밀번호 보호 | ✅ | settings.PASSWORD_HASHERS | BCryptSHA256 1순위, 저장 해시 `bcrypt_sha256$` 확인 |
+| SEC-002 | 보호 기능 인증 | ✅ | settings.REST_FRAMEWORK | DRF 기본 권한 IsAuthenticated (기본 차단) |
+| SEC-003 | 관리자 기능 통제 | 🔨 | accounts/permissions.py | IsAdminRole 제공, 각 기능 적용은 해당 앱에서 |
+| SEC-004 | 일반 사용자 권한 통제 | 🔨 | accounts/permissions.py | 기본 차단 + 역할 검사, 읽기 전용 적용은 projects/catalog에서 |
 | SEC-005 | 프로젝트 소속 검증 | ⬜ | projects | IDOR 방어 |
 | SEC-006 | 비인가 정보 노출 방지 | ⬜ | 전체 | 기본 수준 |
 | SEC-007 | 분석 작업 영역 격리 | ⬜ | analysis | 실행별 디렉토리 |
@@ -54,8 +54,8 @@
 ## TST (테스트)
 | 번호 | 이름 | 상태 | 비고 |
 |---|---|---|---|
-| TST-001 | 인증 기능 시험 | ⬜ | |
-| TST-002 | 역할 권한 시험 | ⬜ | 시연 필수 |
+| TST-001 | 인증 기능 시험 | ✅ | accounts/tests.py — 로그인 성공/실패, 미인증 401, bcrypt 저장 |
+| TST-002 | 역할 권한 시험 | ✅ | accounts/tests.py — 일반 사용자 403, 역할 강등 즉시 반영. 시연 필수 |
 | TST-003 | 프로젝트 접근 시험 | ⬜ | IDOR 시연 필수 |
 | TST-004 | 분석 처리 시험 | ⬜ | 파이프라인 관통 |
 | TST-005 | 진단 항목 시험 | ⬜ | 취약/정상 샘플, 시연 핵심 |

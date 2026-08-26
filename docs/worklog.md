@@ -24,3 +24,17 @@
   - 검증: `manage.py check` 0건 / PostgreSQL 16.15 실접속 / ENGINE=postgresql /
     SECRET_KEY 하드코딩 아님 / `.env` 없을 때 `KeyError`로 기동 실패(fail-fast) / `.env` 미추적
   - 다음: accounts 커스텀 User(이메일 로그인) 정의 → 첫 migrate → 6테이블 (bcrypt 승인 필요)
+- accounts 인증·역할 구현 (SFR-001~003, DAR-002, SEC-001~004, TST-001~002)
+  - 커스텀 User(AbstractUser 기반, email 로그인) + Role(ADMIN/USER) + UserManager
+  - bcrypt 1순위 해셔, DRF 기본 권한 IsAuthenticated, JWT(simplejwt) access 30분/refresh 1일
+  - 엔드포인트: /api/auth/ login·refresh·logout(blacklist)·me
+  - IsAdminRole 권한 클래스 — 역할은 토큰 클레임이 아니라 DB 현재 값으로 검사
+  - 첫 migrate 실행 (12테이블), 신규 의존성 bcrypt 5.0.0 / simplejwt 5.5.1 버전 고정
+  - 검증: 테스트 15개 전부 통과 / accounts_user 존재·auth_user 없음 /
+    실제 저장 해시 접두사 bcrypt_sha256 / manage.py check 0건
+  - 자체 보안 검토(secure-review) 후 3건 수정 — 커밋 전 반영
+    - 이메일 대소문자 무시(save 정규화 + Lower UniqueConstraint + iexact 조회)
+    - 로그인 빈도 제한 5/min (ScopedRateThrottle)
+    - 로그아웃 시 refresh 토큰 소유자 검증, 실패 응답은 통일
+    - 재검증: 테스트 22개(신규 7개 포함) 전부 통과
+  - 다음: projects 앱 — 프로젝트·할당 테이블 + IDOR 방어(SEC-005)

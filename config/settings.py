@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -61,6 +62,7 @@ INSTALLED_APPS = [
 
     # 서드파티
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',  # 로그아웃 시 refresh 토큰 폐기
 
     # 프로젝트 앱 — 책임별 분리 (QLT-001)
     'accounts',   # 사용자 인증, 역할, 권한
@@ -114,6 +116,59 @@ DATABASES = {
         'HOST': os.getenv('POSTGRES_HOST', '127.0.0.1'),
         'PORT': os.getenv('POSTGRES_PORT', '5432'),
     }
+}
+
+
+# 인증 (SFR-001, DAR-002)
+# 이메일 로그인 커스텀 User. 첫 migrate 전에 지정해야 auth.User로 고정되지 않는다.
+AUTH_USER_MODEL = 'accounts.User'
+
+
+# 비밀번호 해시 (SEC-001)
+# bcrypt를 1순위로 둔다 — 적응형(느린) 해시라 무차별 대입에 강하다.
+# BCryptSHA256은 bcrypt의 72바이트 입력 제한을 우회하려 SHA256으로 전처리할 뿐,
+# 실제 저장 강도는 bcrypt가 담당한다 (CLAUDE.md 보안 규칙에서 명시적으로 허용).
+# 뒤의 Django 기본 해셔는 과거 방식으로 저장된 해시를 검증하기 위해 남긴다.
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.ScryptPasswordHasher',
+]
+
+
+# DRF (SFR-002, SEC-002)
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    # 기본은 차단. 엔드포인트를 공개하려면 명시적으로 AllowAny를 걸어야 하므로,
+    # 권한 지정을 빠뜨려도 인증 없이 열리지 않는다 (SEC-002, SEC-004).
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    # bcrypt는 오프라인 크래킹을 늦출 뿐, 온라인 자동 대입은 막지 못한다.
+    # ScopedRateThrottle은 throttle_scope를 지정한 뷰에만 적용되므로
+    # 전역으로 걸어도 다른 엔드포인트에 영향이 없다 (SEC-001 보완).
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.ScopedRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'login': '5/min',
+    },
+}
+
+# 참고: 기본 캐시는 프로세스별 LocMemCache라 워커가 여러 개면 제한이 워커 수만큼
+# 느슨해진다. 운영 배포 시 Redis 등 공유 캐시로 교체해야 한다.
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    # 갱신 때마다 새 refresh를 발급하고 이전 것을 폐기한다 — 유출된 토큰의 수명을 줄인다.
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'SIGNING_KEY': SECRET_KEY,
 }
 
 

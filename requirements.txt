@@ -1,12 +1,16 @@
 # 외부 구성요소 버전 고정 (SEC-010)
 # 취약점 공지·릴리즈 노트를 추적할 수 있도록 직접 의존성만 정확한 버전으로 고정한다.
-# (asgiref / sqlparse / tzdata는 아래 패키지들이 끌어오는 전이 의존성이라 제외)
+# (asgiref / sqlparse / tzdata / pyjwt는 아래 패키지들이 끌어오는 전이 의존성이라 제외)
 # 설치: pip install -r requirements.txt
 
 Django==6.1
 djangorestframework==3.18.0
 psycopg[binary]==3.3.4
 python-dotenv==1.2.3
+
+# 인증 (SFR-002) / 비밀번호 해시 (SEC-001)
+djangorestframework-simplejwt==5.5.1
+bcrypt==5.0.0
 
 # 분석 엔진(Semgrep)은 도입 단계에서 이 파일에 버전을 고정하고
 # 라이선스를 확인한다 (SEC-010, docs/plan.md 6절).
