@@ -26,7 +26,7 @@
 ## DAR (데이터)
 | 번호 | 이름 | 상태 | 구현 위치 | 비고 |
 |---|---|---|---|---|
-| DAR-001 | 데이터 저장소 | ⬜ | PostgreSQL + 마이그레이션 | |
+| DAR-001 | 데이터 저장소 | 🔨 | docker-compose.yml (PG16) | DB 기동 완료, 마이그레이션은 Django 세팅 후 |
 | DAR-002 | 사용자 데이터 | ⬜ | accounts/models | |
 | DAR-003 | 프로젝트 데이터 | ⬜ | projects/models | |
 | DAR-004 | 프로젝트 권한 데이터 | ⬜ | projects/models | 연결 테이블 |

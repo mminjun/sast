@@ -1,0 +1,28 @@
+# DAR-001 데이터 저장소 — 로컬 개발용 PostgreSQL
+# 시크릿(비밀번호)은 이 파일에 쓰지 않고 .env에서만 읽는다 (CLAUDE.md: 시크릿 커밋 금지)
+name: sast
+
+services:
+  db:
+    image: postgres:16
+    container_name: sast-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?.env에 POSTGRES_DB가 필요합니다}
+      POSTGRES_USER: ${POSTGRES_USER:?.env에 POSTGRES_USER가 필요합니다}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?.env에 POSTGRES_PASSWORD가 필요합니다}
+    ports:
+      # 로컬 루프백에만 바인딩 — 같은 네트워크의 다른 기기에 DB를 노출하지 않는다
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - sast-db-data:/var/lib/postgresql/data
+    healthcheck:
+      # $$ = compose 보간이 아니라 컨테이너 셸에서 변수를 푼다
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  sast-db-data:

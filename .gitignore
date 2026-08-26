@@ -17,3 +17,8 @@ db.sqlite3-journal
 
 # 분석 작업 영역 (업로드된 소스·실행별 격리 디렉토리)
 /media/
+
+# 환경변수 (시크릿) — 템플릿만 커밋한다
+.env
+.env.*
+!.env.example
