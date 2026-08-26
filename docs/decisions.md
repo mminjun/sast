@@ -32,3 +32,15 @@
   빈 비밀번호로 뜨면 Postgres가 host 연결을 trust 인증으로 열어버리므로 fail-fast가 안전 | DAR-001, SEC-010
 - DB 포트 바인딩: 127.0.0.1만 | 기본 `5432:5432`는 모든 인터페이스에 열려 같은 네트워크의
   다른 기기에서 DB에 직접 붙을 수 있다. 개발 편의보다 노출 최소화 우선 | SEC-006
+- SECRET_KEY: `os.environ[...]` 기본값 없이 fail-fast | 기본값을 두면 `.env` 누락 시
+  예측 가능한 키로 조용히 기동돼 세션·토큰 위조가 가능하다. compose의 `${VAR:?}`와 같은 원칙.
+  startproject가 박아둔 `django-insecure-...` 키는 워킹트리에 노출된 값이라 재사용하지 않고 폐기 | SEC-010
+- DEBUG 기본값 False | 환경변수 누락 시 디버그가 켜지는 방향이 아니라 꺼지는 방향이
+  안전한 기본값. DEBUG=False에서 ALLOWED_HOSTS가 비면 전 요청이 400이라 함께 .env로 분리 | SEC-006
+- Django DB 설정에 compose와 같은 `POSTGRES_*` 키 재사용 | Django 전용 키를 따로 두면
+  컨테이너와 앱이 서로 다른 값을 바라볼 수 있다. `POSTGRES_HOST`만 추가 | DAR-001
+- 첫 migrate 보류 | 지금 migrate하면 `auth.User`로 고정되는데 DAR-002/SFR-001은 이메일 로그인
+  커스텀 User를 요구한다. 이후 `AUTH_USER_MODEL` 교체 시 DB 초기화가 필요하므로
+  accounts 커스텀 User 정의 후 첫 migrate | DAR-002, SFR-001
+- 의존성 버전 고정: requirements.txt에 직접 의존성만 `==` | 취약점 공지·릴리즈 노트 추적
+  대상을 명확히 한다. 전이 의존성까지 고정하는 lock은 현 규모에 과함 | SEC-010

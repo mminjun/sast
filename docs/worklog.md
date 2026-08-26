@@ -15,3 +15,12 @@
 - 검증: 컨테이너 healthy / PostgreSQL 16.15 접속 확인 / down→up 후 테이블 잔존(영속성) 확인 /
   `.env` 미추적 확인 / 비밀번호 없을 때 기동 실패(fail-fast) 확인
 - 다음: Django + DRF 프로젝트 생성 → settings의 DATABASES를 .env에 연결 → 6테이블
+- Django 뼈대 정리 (QLT-001, DAR-001, SEC-010)
+  - 앱 4개 생성·등록: accounts / projects / analysis / catalog + DRF
+  - settings.py를 .env 기반으로: SECRET_KEY(하드코딩 제거, fail-fast), DEBUG(기본 False),
+    ALLOWED_HOSTS, DATABASES를 SQLite → PostgreSQL(psycopg3, compose와 POSTGRES_* 키 공유)
+  - requirements.txt 신규: 직접 의존성 4종 버전 고정
+  - db.sqlite3 삭제 (PG 전환으로 불필요, git 미추적 확인 후)
+  - 검증: `manage.py check` 0건 / PostgreSQL 16.15 실접속 / ENGINE=postgresql /
+    SECRET_KEY 하드코딩 아님 / `.env` 없을 때 `KeyError`로 기동 실패(fail-fast) / `.env` 미추적
+  - 다음: accounts 커스텀 User(이메일 로그인) 정의 → 첫 migrate → 6테이블 (bcrypt 승인 필요)

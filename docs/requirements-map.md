@@ -26,7 +26,7 @@
 ## DAR (데이터)
 | 번호 | 이름 | 상태 | 구현 위치 | 비고 |
 |---|---|---|---|---|
-| DAR-001 | 데이터 저장소 | 🔨 | docker-compose.yml (PG16) | DB 기동 완료, 마이그레이션은 Django 세팅 후 |
+| DAR-001 | 데이터 저장소 | ✅ | docker-compose.yml (PG16) + config/settings.py | Django→PG 접속 확인(16.15). 테이블은 커스텀 User 확정 후 첫 migrate |
 | DAR-002 | 사용자 데이터 | ⬜ | accounts/models | |
 | DAR-003 | 프로젝트 데이터 | ⬜ | projects/models | |
 | DAR-004 | 프로젝트 권한 데이터 | ⬜ | projects/models | 연결 테이블 |
@@ -49,7 +49,7 @@
 | SEC-007 | 분석 작업 영역 격리 | ⬜ | analysis | 실행별 디렉토리 |
 | SEC-008 | 파일 경로 검증 | ⬜ | analysis | Zip Slip 방어 |
 | SEC-009 | 분석 실행 보호 | ⬜ | analysis | 타임아웃, 기본 수준 |
-| SEC-010 | 외부 구성요소 관리 | ⬜ | 문서 | Semgrep 버전·라이선스 |
+| SEC-010 | 외부 구성요소 관리 | 🔨 | requirements.txt | 직접 의존성 4종 버전 고정 완료, Semgrep 버전·라이선스는 도입 시 |
 
 ## TST (테스트)
 | 번호 | 이름 | 상태 | 비고 |
@@ -66,7 +66,7 @@
 ## QLT (품질)
 | 번호 | 이름 | 상태 | 비고 |
 |---|---|---|---|
-| QLT-001 | 모듈화 | ⬜ | 4개 앱 분리로 충족 |
+| QLT-001 | 모듈화 | 🔨 | accounts/projects/analysis/catalog 앱 생성·등록 완료, 내용은 각 기능 구현 시 |
 | QLT-002 | 진단 항목 독립성 | ⬜ | Semgrep 룰 구조로 충족 |
 | QLT-003 | 확장성 | ⬜ | SFR-010과 동일 |
 | QLT-004 | 결과 일관성 | ⬜ | 정규화 계층 |
