@@ -1,26 +1,47 @@
-# CLAUDE.md
+## 프로젝트 개요
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+KISA 개발보안 가이드 기반 SAST(정적 애플리케이션 보안 테스트) 웹 시스템.
+소스코드를 업로드하면 정적 분석으로 보안 취약점을 찾아 대시보드로 보여준다.
+상세 계획은 docs/plan.md 참조. 이 파일과 plan.md를 항상 먼저 읽는다.
 
-## Repository contents
+## 기술 스택
 
-This repository currently contains a single Claude Design (pen.dev) file, `dashboard.pen`, plus `.gitignore`. There is no application source code, no package manifest, and no build/lint/test tooling in this repo yet.
+- 백엔드: Django + Django REST Framework
+- 프론트: React (별도 폴더로 분리, DRF와 API 통신)
+- DB: PostgreSQL
+- 분석 엔진: Semgrep (외부 연계, 직접 진단 로직 구현 안 함)
 
-## Working with `.pen` files
+## 앱 구조 (QLT-001 모듈화 — 책임별 분리)
 
-`dashboard.pen` is an encrypted Claude Design canvas file. Do not use `Read` or `Grep` on it — it will not produce usable output. Access and modify it only through the `pencil` MCP server's tools (for reading, generating, and validating the design), following each tool's input schema.
+- accounts — 사용자 인증, 역할(관리자/일반), 권한
+- projects — 분석 프로젝트 관리, 사용자 할당
+- analysis — 소스 업로드, Semgrep 실행, 상태 관리
+- catalog — KISA 49개 진단 기준, 결과 저장·조회
 
-## 작업 규칙 (Working rules)
+각 기능은 위 앱으로 분리한다. 한 앱에 여러 책임을 섞지 않는다.
 
-### 범위
-- 한 번에 한 기능씩만 완주한다.
-- 요구사항이 모호하면 구현을 시작하지 말고 먼저 질문한다.
+## 보안 규칙 (필수 — 이 프로젝트는 보안 도구다)
 
-### 안전
-- 새 의존성(라이브러리) 추가 전 반드시 승인받는다.
-- 파일 삭제나 되돌리기 힘든 작업은 실행 전 확인한다.
-- 시크릿·API 키를 코드나 로그에 남기지 않는다.
+- 비밀번호: bcrypt로 해시 (적응형·느린 해시). SHA-2 등 범용 고속 해시를 비밀번호 저장에 단독 사용 금지 — 무차별 대입에 취약. 단, Django 표준 BCryptSHA256PasswordHasher처럼 bcrypt의 72바이트 입력 제한을 우회하려 SHA256으로 전처리하는 건 허용(실제 저장 강도는 bcrypt가 담당).
+- 접근 제어: 클라이언트가 보낸 ID를 신뢰하지 말고, 항상 DB의 권한 관계를
+  서버에서 재검증한다 (IDOR 방어, SEC-005).
+- 파일 처리: zip 업로드/압축 해제 시 경로를 검증한다. 격리 영역 밖을
+  가리키는 경로·심볼릭 링크를 차단한다 (Zip Slip / Path Traversal 방어, SEC-008).
+- 작업 격리: 분석 대상 소스는 분석 실행 건별로 격리된 디렉토리에서
+  처리하고, 그 밖의 파일에 접근하지 않는다 (SEC-007).
+- 권한 노출: 권한 없는 리소스 접근은 존재 여부가 드러나지 않게 응답한다 (SEC-006).
+- 시크릿·키를 코드나 로그, 커밋에 남기지 않는다.
 
-### 완료 기준
-- 빌드 성공 + 직접 동작 확인까지 되어야 완료로 본다.
-- 완료를 주장할 때 근거(테스트 출력, diff, 스크린샷)를 함께 보고한다.
+## 작업 방식
+
+- 큰 작업(여러 파일 생성/수정)은 코드 작성 전 계획부터 제시한다 (Plan Mode).
+- 한 번에 한 기능씩 완주한다. 요구사항이 모호하면 먼저 질문한다.
+- 새 의존성 추가 전 승인받는다.
+- 각 요구사항 구현 시 대응하는 RFP 번호(SFR/DAR/SEC/TST/QLT)를 커밋 메시지나
+  주석에 남긴다 (추적성).
+- 기능 구현 완료 시 docs/requirements-map.md의 해당 번호 상태를 갱신한다.
+- 하루 작업 종료 시 docs/worklog.md에 기록을 남긴다.
+## 완료 기준
+
+- 기능이 실제로 동작하고, 관련 테스트/시연으로 확인될 때 완료로 본다.
+- 완료를 주장할 때 근거(실행 결과, 테스트 출력)를 함께 제시한다.

@@ -1,13 +1,19 @@
-# OS
-Thumbs.db
-Desktop.ini
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
 
-# 에디터
-.vscode/
+# 가상환경
+venv/
+.venv/
+env/
 
-# 의존성 
-node_modules/
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
 
-# 환경변수·비밀값
-.env
-*.local
+# 분석 작업 영역 (업로드된 소스·실행별 격리 디렉토리)
+/media/
