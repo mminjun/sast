@@ -55,7 +55,7 @@ def checksum(data):
 
 
 DB_PASSWORD = "p@ssw0rd-literal"  # KISA-SF-06
-API_KEY = "sk-live-0123456789abcdef"  # KISA-SF-06
+API_KEY = "EXAMPLE-NOT-A-REAL-KEY-0123456789"  # KISA-SF-06
 
 
 def issue_reset_token():
