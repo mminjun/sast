@@ -220,9 +220,19 @@ ANALYSIS_MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 원본 zip 50MB
 ANALYSIS_MAX_EXTRACTED_SIZE = 100 * 1024 * 1024  # 압축 해제 후 총합 100MB
 ANALYSIS_MAX_EXTRACTED_FILES = 1000
 
+# 진단 기준 카탈로그 (SFR-012, SFR-013, DAR-007)
+# 룰 디렉토리는 두 곳에서 쓰인다 — seed_catalog 커맨드가 매핑을 읽고, Semgrep이 분석에
+# 사용한다. 두 곳이 다른 디렉토리를 보면 "카탈로그에는 구현됨인데 실제로는 안 돌아가는"
+# 상태가 되므로 정의를 여기 하나로 둔다.
+CATALOG_RULES_DIR = BASE_DIR / 'catalog' / 'rules'
+CATALOG_SEED_FILE = BASE_DIR / 'catalog' / 'data' / 'kisa_rules.json'
+
+
 # Semgrep 실행 (SFR-008~009, SEC-009)
-# 룰셋은 catalog 앱에서 KISA 49개 매핑 룰(YAML)이 준비되면 교체한다 (QLT-002, docs/decisions.md).
-ANALYSIS_SEMGREP_CONFIG = 'p/python'
+# 공개 레지스트리(p/python)를 쓰지 않고 KISA 49개에 매핑된 자체 룰만 사용한다 —
+# 레지스트리 룰은 KISA 항목 매핑이 없어 등급 근거가 없는 결과를 만들고, 오탐 통제도
+# 불가능하다 (QLT-002, docs/decisions.md).
+ANALYSIS_SEMGREP_CONFIG = str(CATALOG_RULES_DIR)
 ANALYSIS_SEMGREP_TIMEOUT = 120  # 초 — 타임아웃 시 FAILED로 기록
 
 

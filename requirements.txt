@@ -17,3 +17,10 @@ bcrypt==5.0.0
 # subprocess로 외부 CLI를 호출만 하고 소스를 정적/동적 링크하지 않으므로 카피레프트
 # 의무가 우리 코드로 전이되지 않는다 (plan.md 6절 "직접 진단 로직 구현 안 함"과 일치).
 semgrep==1.175.0
+
+# 진단 기준 카탈로그 (SFR-012, SFR-013)
+# seed_catalog 커맨드가 catalog/rules/*.yaml의 metadata.kisa_code를 읽어 룰↔KISA 항목
+# 매핑을 갱신하는 데 쓴다. semgrep도 YAML을 다루지만 ruamel.yaml을 쓰고 PyYAML을
+# 끌어오지 않으므로(pip show pyyaml의 Required-by 비어 있음) 전이 의존성이 아니라
+# 우리 직접 의존성이다. 라이선스: MIT.
+PyYAML==6.0.3

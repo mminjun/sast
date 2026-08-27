@@ -16,6 +16,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from .models import AnalysisRun, AnalysisStatus
+from .signals import run_succeeded
 
 
 class ZipValidationError(Exception):
@@ -164,10 +165,22 @@ def run_semgrep(run):
                 '--quiet',
                 '--metrics=off',  # 잠재적으로 민감한 고객 소스코드를 다루는 도구라
                                   # 기본 익명 사용 지표 전송조차 켜 두지 않는다.
+                # 작업 영역은 MEDIA_ROOT 아래이고 .gitignore에 /media/가 있다. Semgrep은
+                # 기본적으로 git ignore 규칙을 적용하므로, 이 옵션이 없으면 격리
+                # 디렉토리 전체가 스캔 대상에서 빠져 결과가 0건이 된다. 그런데도 종료
+                # 코드는 0이라 실행은 성공으로 보인다 (docs/decisions.md 발견 2).
+                '--no-git-ignore',
                 str(target),
             ],
             capture_output=True,
             text=True,
+            # 출력 인코딩을 명시한다. 지정하지 않으면 로케일 기본값(한국어 Windows는
+            # cp949)으로 디코딩해, 한글이 든 룰 메시지가 담긴 JSON이 깨진다.
+            encoding='utf-8',
+            # 자식 프로세스도 UTF-8 모드로 띄운다. Semgrep CLI가 룰 파일을 인코딩
+            # 지정 없이 읽어, 이게 없으면 한글 메시지에서 UnicodeDecodeError로
+            # 룰 로딩 자체가 실패한다 (docs/decisions.md 발견 1).
+            env={**os.environ, 'PYTHONUTF8': '1'},
             timeout=settings.ANALYSIS_SEMGREP_TIMEOUT,
             shell=False,
         )
@@ -193,3 +206,7 @@ def run_semgrep(run):
     run.status = AnalysisStatus.SUCCEEDED
     run.finished_at = timezone.now()
     run.save(update_fields=['raw_result', 'status', 'finished_at'])
+
+    # 결과가 저장된 뒤에 알린다 — 수신자(catalog)가 raw_result를 읽어 표준화한다.
+    # 이 앱은 듣는 쪽이 누구인지 모른다 (analysis/signals.py 참고, QLT-001).
+    run_succeeded.send(sender=AnalysisRun, run=run)

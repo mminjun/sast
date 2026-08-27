@@ -1,0 +1,24 @@
+# KISA 제4절 에러처리 (EH) — Python 실탐지 룰
+# 매핑·심각도 원칙은 iv_input_validation.yaml 머리말 참조.
+
+rules:
+  - id: kisa-eh-01-error-message-disclosure
+    languages: [python]
+    # 이 룰의 severity를 ERROR로 두는 것은 의도적이다. 카탈로그의 KISA-EH-01 등급은
+    # MEDIUM이며, 최종 심각도는 카탈로그 값이 이겨야 한다(QLT-004). 두 값이 실제로
+    # 충돌하는 케이스를 하나 남겨 두어야 우선순위가 말이 아니라 테스트로 증명된다.
+    severity: ERROR
+    message: >-
+      오류 메시지 정보노출 (KISA-EH-01). 예외 내용이나 디버그 화면이 사용자에게 그대로
+      전달되면 내부 구조·질의문·경로가 노출됩니다. 사용자에겐 일반화된 메시지를 주고
+      상세는 서버 로그에만 남기세요.
+    metadata:
+      kisa_code: KISA-EH-01
+      kisa_name: 오류 메시지 정보노출
+      cwe: CWE-209
+    pattern-either:
+      - pattern: DEBUG = True
+      - pattern: return $RESP(..., str($ERR), ...)
+      # 패턴 안에 콜론이 있어 YAML 매핑으로 해석되지 않도록 인용한다.
+      - pattern: 'return $RESP({..., $KEY: str($ERR)}, ...)'
+      - pattern: return $RESP(..., traceback.format_exc(...), ...)

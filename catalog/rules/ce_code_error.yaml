@@ -1,0 +1,29 @@
+# KISA 제5절 코드오류 (CE) — Python 실탐지 룰
+# 매핑·심각도 원칙은 iv_input_validation.yaml 머리말 참조.
+
+rules:
+  - id: kisa-ce-05-unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: >-
+      신뢰할 수 없는 데이터의 역직렬화 (KISA-CE-05). pickle·marshal·yaml.load는 복원
+      과정에서 임의 객체를 생성하며 코드 실행으로 이어집니다. JSON이나
+      yaml.safe_load를 사용하세요.
+    metadata:
+      kisa_code: KISA-CE-05
+      kisa_name: 신뢰할 수 없는 데이터의 역직렬화
+      cwe: CWE-502
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads(...)
+          - pattern: pickle.load(...)
+          - pattern: cPickle.loads(...)
+          - pattern: cPickle.load(...)
+          - pattern: marshal.loads(...)
+          - pattern: yaml.load($DATA)
+          - pattern: yaml.load($DATA, Loader=yaml.Loader)
+          - pattern: yaml.load($DATA, Loader=yaml.UnsafeLoader)
+          - pattern: yaml.load($DATA, Loader=yaml.FullLoader)
+      # 안전한 로더를 명시한 호출은 제외한다 (오탐 억제).
+      - pattern-not: yaml.load(..., Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader)

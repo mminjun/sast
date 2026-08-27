@@ -1,0 +1,104 @@
+# KISA 제1절 입력데이터 검증 및 표현 (IV) — Python 실탐지 룰
+#
+# metadata.kisa_code가 카탈로그 항목(catalog_rule.code)과의 매핑 단일 원본이다.
+# 시드 커맨드(seed_catalog)가 이 값을 읽어 해당 항목의 semgrep_rule_ids를 채우므로,
+# 룰을 추가하면 코드 수정 없이 카탈로그가 '실탐지 구현됨'으로 바뀐다 (SFR-012, QLT-002).
+#
+# severity(ERROR/WARNING/INFO)는 Semgrep 형식상 필수라 적지만 최종 등급이 아니다.
+# 최종 심각도는 카탈로그의 KISA 유형 기반 등급이며, 이 값은 매핑 실패 시에만
+# 폴백으로 쓰인다 (QLT-004, docs/decisions.md).
+
+rules:
+  - id: kisa-iv-01-sql-injection
+    languages: [python]
+    severity: ERROR
+    message: >-
+      SQL 삽입 (KISA-IV-01). 외부 입력이 섞인 문자열을 그대로 질의로 실행하고 있습니다.
+      문자열 결합·포매팅 대신 파라미터 바인딩(placeholder)을 사용하세요.
+    metadata:
+      kisa_code: KISA-IV-01
+      kisa_name: SQL 삽입
+      cwe: CWE-89
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute(f"...", ...)
+          - pattern: $CURSOR.execute("..." % ..., ...)
+          - pattern: $CURSOR.execute("..." + $X, ...)
+          - pattern: $CURSOR.execute("...".format(...), ...)
+          - pattern: $CURSOR.executemany(f"...", ...)
+          - pattern: $MODEL.raw(f"...", ...)
+          - pattern: $MODEL.raw("..." % ..., ...)
+          - pattern: $MODEL.raw("..." + $X, ...)
+
+  - id: kisa-iv-02-code-injection
+    languages: [python]
+    severity: ERROR
+    message: >-
+      코드삽입 (KISA-IV-02). 외부에서 들어온 값이 코드로 해석되어 실행될 수 있습니다.
+      eval/exec 대신 명시적인 분기나 안전한 파서를 사용하세요.
+    metadata:
+      kisa_code: KISA-IV-02
+      kisa_name: 코드삽입
+      cwe: CWE-94
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+      # 상수 문자열만 넘기는 경우는 외부 입력이 아니므로 제외한다 (오탐 억제).
+      - pattern-not: eval("...")
+      - pattern-not: exec("...")
+
+  - id: kisa-iv-03-path-manipulation
+    languages: [python]
+    severity: ERROR
+    message: >-
+      경로 조작 및 자원 삽입 (KISA-IV-03). 외부 입력으로 만든 경로를 그대로 열고 있습니다.
+      허용된 디렉토리 기준으로 정규화(resolve)한 뒤 그 안에 있는지 확인하세요.
+    metadata:
+      kisa_code: KISA-IV-03
+      kisa_name: 경로 조작 및 자원 삽입
+      cwe: CWE-22
+    patterns:
+      - pattern-either:
+          - pattern: open(f"...", ...)
+          - pattern: open("..." + $X, ...)
+          - pattern: open("..." % ..., ...)
+          - pattern: open("...".format(...), ...)
+
+  - id: kisa-iv-05-os-command-injection
+    languages: [python]
+    severity: ERROR
+    message: >-
+      운영체제 명령어 삽입 (KISA-IV-05). 외부 입력이 셸 명령으로 실행될 수 있습니다.
+      shell=True를 피하고 인자를 리스트로 전달하세요.
+    metadata:
+      kisa_code: KISA-IV-05
+      kisa_name: 운영체제 명령어 삽입
+      cwe: CWE-78
+    patterns:
+      - pattern-either:
+          - pattern: os.system($CMD)
+          - pattern: os.popen($CMD, ...)
+          - pattern: subprocess.$FUNC(..., shell=True, ...)
+      # 상수 명령만 실행하는 경우는 삽입 경로가 없으므로 제외한다 (오탐 억제).
+      - pattern-not: os.system("...")
+      - pattern-not: os.popen("...")
+
+  - id: kisa-iv-12-ssrf
+    languages: [python]
+    severity: ERROR
+    message: >-
+      서버사이드 요청 위조 (KISA-IV-12). 외부 입력으로 만든 주소로 서버가 요청을 보냅니다.
+      허용 목록으로 대상 호스트를 제한하세요.
+    metadata:
+      kisa_code: KISA-IV-12
+      kisa_name: 서버사이드 요청 위조
+      cwe: CWE-918
+    patterns:
+      - pattern-either:
+          - pattern: requests.$METHOD(f"...", ...)
+          - pattern: requests.$METHOD("..." + $X, ...)
+          - pattern: requests.$METHOD("..." % ..., ...)
+          - pattern: requests.$METHOD("...".format(...), ...)
+          - pattern: urllib.request.urlopen(f"...", ...)
+          - pattern: urllib.request.urlopen("..." + $X, ...)

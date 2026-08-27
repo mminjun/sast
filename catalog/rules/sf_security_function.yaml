@@ -1,0 +1,101 @@
+# KISA 제2절 보안기능 (SF) — Python 실탐지 룰
+# 매핑·심각도 원칙은 iv_input_validation.yaml 머리말 참조.
+
+rules:
+  - id: kisa-sf-04-weak-crypto-algorithm
+    languages: [python]
+    severity: ERROR
+    message: >-
+      취약한 암호화 알고리즘 사용 (KISA-SF-04). MD5/SHA-1/DES/RC4는 안전성이 깨진
+      알고리즘입니다. SHA-256 이상 또는 AES 등 현행 권고 알고리즘으로 교체하세요.
+    metadata:
+      kisa_code: KISA-SF-04
+      kisa_name: 취약한 암호화 알고리즘 사용
+      cwe: CWE-327
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+          - pattern: hashlib.new("md5", ...)
+          - pattern: hashlib.new("sha1", ...)
+          - pattern: $MOD.DES.new(...)
+          - pattern: $MOD.ARC4.new(...)
+      # 체크섬 등 보안 목적이 아님을 명시한 호출은 제외한다 (오탐 억제).
+      - pattern-not: hashlib.md5(..., usedforsecurity=False)
+      - pattern-not: hashlib.sha1(..., usedforsecurity=False)
+
+  - id: kisa-sf-06-hardcoded-secret
+    languages: [python]
+    severity: ERROR
+    message: >-
+      하드코드된 중요정보 (KISA-SF-06). 비밀번호·키를 소스에 직접 적으면 소스 열람만으로
+      노출됩니다. 환경변수나 시크릿 저장소에서 읽으세요.
+    metadata:
+      kisa_code: KISA-SF-06
+      kisa_name: 하드코드된 중요정보
+      cwe: CWE-798
+    patterns:
+      - pattern-either:
+          - pattern: $NAME = "..."
+          - pattern: $FUNC(..., $NAME="...", ...)
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^[a-z_]*(password|passwd|pwd|secret|api_key|apikey|access_key|private_key)[a-z_]*$
+      # 빈 문자열은 자리표시자이지 시크릿이 아니다 (오탐 억제).
+      - pattern-not: $NAME = ""
+      - pattern-not: $FUNC(..., $NAME="", ...)
+
+  - id: kisa-sf-08-insecure-random
+    languages: [python]
+    severity: WARNING
+    message: >-
+      적절하지 않은 난수 값 사용 (KISA-SF-08). random 모듈은 예측 가능한 의사난수라
+      토큰·세션 값 생성에 쓰면 안 됩니다. secrets 모듈을 사용하세요.
+    metadata:
+      kisa_code: KISA-SF-08
+      kisa_name: 적절하지 않은 난수 값 사용
+      cwe: CWE-330
+    patterns:
+      # 보안 용도로 쓰이는 이름에 대입될 때만 잡는다 — 일반적인 random 사용까지
+      # 걸면 오탐이 대부분이 된다 (선정 원칙 2: 오탐이 적을 것).
+      - pattern: $NAME = random.$FUNC(...)
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^[a-z_]*(token|session|otp|password|passwd|secret|nonce|salt|key|reset|auth)[a-z_]*$
+
+  - id: kisa-sf-11-improper-cert-validation
+    languages: [python]
+    severity: ERROR
+    message: >-
+      부적절한 인증서 유효성 검증 (KISA-SF-11). 인증서 검증을 끄면 중간자 공격에
+      통신 내용이 그대로 노출됩니다. 검증을 켜고 신뢰 저장소를 지정하세요.
+    metadata:
+      kisa_code: KISA-SF-11
+      kisa_name: 부적절한 인증서 유효성 검증
+      cwe: CWE-295
+    pattern-either:
+      - pattern: requests.$METHOD(..., verify=False, ...)
+      - pattern: ssl._create_unverified_context(...)
+      - pattern: $CTX.check_hostname = False
+      - pattern: $CTX.verify_mode = ssl.CERT_NONE
+
+  - id: kisa-sf-14-unsalted-password-hash
+    languages: [python]
+    severity: ERROR
+    message: >-
+      솔트 없이 일방향 해쉬 함수 사용 (KISA-SF-14). 솔트 없는 해시는 레인보우 테이블로
+      원문이 복원됩니다. bcrypt 등 솔트를 포함한 적응형 해시를 사용하세요.
+    metadata:
+      kisa_code: KISA-SF-14
+      kisa_name: 솔트 없이 일방향 해쉬 함수 사용
+      cwe: CWE-759
+    patterns:
+      # MD5/SHA-1 자체의 취약성은 KISA-SF-04가 담당한다. 여기서는 알고리즘은
+      # 충분히 강하지만 솔트 없이 비밀번호를 해시하는 경우를 잡는다.
+      - pattern-either:
+          - pattern: hashlib.sha256($PW.encode(...)).hexdigest()
+          - pattern: hashlib.sha512($PW.encode(...)).hexdigest()
+          - pattern: hashlib.sha256($PW).hexdigest()
+      - metavariable-regex:
+          metavariable: $PW
+          regex: (?i)^[a-z_]*(password|passwd|pwd)[a-z_]*$

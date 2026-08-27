@@ -1,0 +1,19 @@
+# KISA 제6절 캡슐화 (EN) — Python 실탐지 룰
+# 매핑·심각도 원칙은 iv_input_validation.yaml 머리말 참조.
+
+rules:
+  - id: kisa-en-02-leftover-debug-code
+    languages: [python]
+    severity: WARNING
+    message: >-
+      제거되지 않고 남은 디버그 코드 (KISA-EN-02). 디버거 진입점이 배포 코드에 남으면
+      실행이 멈추거나 내부 상태가 노출됩니다. 배포 전에 제거하세요.
+    metadata:
+      kisa_code: KISA-EN-02
+      kisa_name: 제거되지 않고 남은 디버그 코드
+      cwe: CWE-489
+    pattern-either:
+      - pattern: breakpoint(...)
+      - pattern: pdb.set_trace(...)
+      - pattern: ipdb.set_trace(...)
+      - pattern: pdb.Pdb(...).set_trace(...)

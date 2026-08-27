@@ -90,3 +90,48 @@
     - 재검증: analysis 테스트 30개(기존 케이스 포함) 전부 통과
   - 다음: catalog 앱 — KISA 49개 진단 기준 등록, Semgrep 결과 표준화(raw_result → Finding),
     결과 조회·심각도 필터 (SFR-012~014, 016~017, DAR-006~007)
+- catalog 앱 구현 (SFR-012~014, 016~017, DAR-006~007, 009, QLT-002, 004, TST-005~007)
+  - 진단 기준 49개 등록: KISA 소프트웨어 보안약점 진단가이드 2021.11 기준을 그대로
+    `catalog/data/kisa_rules.json`에 시드. 코드 체계는 `KISA-<유형약어>-<절 내 순번>`
+    (IV/SF/TS/EH/CE/EN/AA). 유형 분포 IV17/SF16/TS2/EH3/CE5/EN4/AA2 = 49 확인
+  - 심각도는 개발자 판단으로 확정(멘토 승인 사항 — 가이드에 항목별 등급이 없다).
+    3단계 원칙(직접 침해=H / 조건부·정찰·가용성=M / 간접=L)으로 H26/M20/L3 배정하고,
+    실탐지 13개는 항목별 사유를 `severity_reason` 필드와 decisions.md 양쪽에 기록
+  - 자체 Semgrep 룰 13개 작성(`catalog/rules/*.yaml`), 공개 레지스트리 `p/python` 폐기.
+    `metadata.kisa_code`가 룰↔항목 매핑의 단일 원본 — 룰 YAML 추가 + 시드 재실행이면
+    코드 수정 없이 카탈로그가 갱신된다(SFR-012, QLT-002)
+  - 표준화 계층(SFR-014): raw_result → Finding. 심각도는 `normalize_severity()` 한 곳에서
+    결정 — 카탈로그 등급이 최종, Semgrep 값은 미매핑 시 폴백(QLT-004). 실행 성공 시
+    시그널(analysis→catalog 단방향)로 자동 연결, 멱등
+  - 조회 API 6종: 카탈로그 목록·상세·집계 / 결과 목록·집계·재표준화. 심각도·유형·항목
+    필터(SFR-017), 심각도 높은 순 정렬, 잘못된 필터 값은 400
+  - IDOR 방어는 projects·analysis와 같은 원칙(스코프 쿼리셋). 스코프 검사가 필터 검증보다
+    먼저 실행돼 400/404 차이로 실행의 존재를 떠볼 수 없다(SEC-006)
+  - 신규 의존성 PyYAML 6.0.3(MIT, 승인받음). 마이그레이션 1개(catalog.0001_initial),
+    테이블 2개 추가로 plan.md §4의 6테이블 설계 완성
+  - **실제로 돌려보고서야 드러난 외부 도구 연계 문제 4건** (decisions.md에 별도 기록)
+    - Semgrep이 룰 파일을 cp949로 읽어 한글 메시지에서 룰 로딩 실패 → `PYTHONUTF8=1`
+    - Semgrep이 `.gitignore`를 존중해 작업 영역(`media/` 아래) 전체를 건너뜀 → 결과 0건인데
+      종료 코드 0이라 SUCCEEDED로 보였다. **어제 analysis 시연이 이걸 놓친 원인** —
+      상태·저장 여부만 봤지 raw_result 안의 results가 빈 배열인 건 안 봤다 → `--no-git-ignore`
+    - Semgrep이 미인증 상태에서 코드 조각을 `requires login`으로 가림 → 격리 디렉토리의
+      파일에서 직접 읽는다(계정 연동은 외부 의존을 늘리는 선택이라 하지 않음)
+    - `subprocess.run(text=True)`가 로케일 코덱으로 출력을 디코딩 → `encoding='utf-8'`
+    - 교훈: 분석 관련 검증의 완료 기준을 상태값이 아니라 **결과 건수**로 잡는다
+  - 검증: 전체 테스트 180개 통과(기존 84 + catalog 신규 96, 회귀 0건) / manage.py check 0건 /
+    psql로 catalog_rule·catalog_finding 스키마·인덱스·FK 확인 / 실제 설정으로 업로드→실행→
+    표준화→조회 관통 25개 항목 확인 — 취약 샘플 20건 정탐, 안전 샘플 0건 오탐, 응답에
+    절대경로·workspace UUID 없음, 카탈로그 등급이 도구 등급을 양방향으로 역전
+    (EH-01 ERROR→MEDIUM, SF-08 WARNING→HIGH). 데모 데이터는 검증 후 정리
+  - 자체 보안 검토(secure-review) 후 3건 수정 — 커밋 전 반영
+    - 재표준화를 `select_for_update`로 직렬화 — 동시 요청 시 앞 트랜잭션이 커밋한 행을
+      뒤 트랜잭션이 지우지 못해 결과가 두 배로 저장될 수 있었다
+    - 코드 조각 추출에 파일 크기(2MB)·줄 길이(500자) 상한 + 수집 1회 캐시 — 줄 수만
+      제한하면 한 줄짜리 대용량 파일에서 메모리가 튄다
+    - 결과 목록 뷰에만 페이지네이션(50/최대 200) — 전역 설정으로 걸면 기존 앱 응답 형태가
+      바뀌어 회귀가 된다
+    - 재검증: 수정 확인 19개 + API 48개 + 전체 180개 통과
+  - 후속 과제로 기록(코드 미변경): DRF BrowsableAPIRenderer는 로컬 시연 중이라 유지하되
+    운영 배포 시 JSONRenderer만 남긴다. 전역 설정이라 한 앱만 바꾸면 불일치가 생긴다
+  - 다음: 중간발표 자료 정리 → React 화면 (pen.dev 목업) → 도그푸딩(우리 SAST로 우리 코드
+    분석, `catalog/samples/`는 제외)
