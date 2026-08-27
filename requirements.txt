@@ -12,5 +12,8 @@ python-dotenv==1.2.3
 djangorestframework-simplejwt==5.5.1
 bcrypt==5.0.0
 
-# 분석 엔진(Semgrep)은 도입 단계에서 이 파일에 버전을 고정하고
-# 라이선스를 확인한다 (SEC-010, docs/plan.md 6절).
+# 분석 엔진 (SFR-008~009, SEC-010)
+# 라이선스: LGPL-2.1 (github.com/semgrep/semgrep/blob/develop/LICENSE, 확인일 2026-08-27).
+# subprocess로 외부 CLI를 호출만 하고 소스를 정적/동적 링크하지 않으므로 카피레프트
+# 의무가 우리 코드로 전이되지 않는다 (plan.md 6절 "직접 진단 로직 구현 안 함"과 일치).
+semgrep==1.175.0

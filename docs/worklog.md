@@ -62,3 +62,31 @@
       되도록 (member_detail 액션과 비대칭이던 부분을 통일)
     - 재검증: 테스트 54개(신규 1개 포함) 전부 통과
   - 다음: analysis 앱 — zip 업로드 → Semgrep 실행 파이프라인 (SFR-007~009, SEC-007~008)
+- analysis 앱 구현 (SFR-007~009, DAR-005, SEC-007~009, TST-004)
+  - AnalysisRun(DAR-005) 모델: project CASCADE·created_by PROTECT, workspace_id(UUID, 격리
+    디렉토리 명명용), status(TextChoices: PENDING/RUNNING/SUCCEEDED/FAILED, SFR-015),
+    raw_result(JSONField — Semgrep 원본, 표준화는 catalog 앱 몫)
+  - 업로드/실행 API 2단계 분리: POST /api/projects/{id}/analysis-runs/(zip 업로드+검증+등록,
+    관리자) / POST /api/analysis-runs/{id}/execute/(Semgrep 트리거, 관리자) / GET 목록·상세는
+    스코프된 인증 사용자(일반=할당 프로젝트만) — projects 앱과 동일한 IDOR 방어 원칙 재사용
+  - 작업 영역 격리(SEC-007): MEDIA_ROOT/analysis_runs/<workspace_id>/, 경로는 저장 문자열이
+    아니라 매번 재계산
+  - Zip Slip 방어(SEC-008): extractall() 미사용, 절대경로·드라이브문자·`..`·심볼릭링크 차단 +
+    resolve()+relative_to() 최종 검증. 전수 검증 후 추출이라 부분 추출 없음. zip bomb 상한
+    100MB/1000개(사용자 확정값)
+  - Semgrep 1.175.0 신규 의존성(승인받음), 라이선스 LGPL-2.1 확인(subprocess 호출만이라
+    카피레프트 미전이). 동기 실행(요청 안 블로킹), 타임아웃 120초, 룰셋은 임시 `p/python`
+    (catalog에서 KISA 49개 매핑으로 교체 예정)
+  - 검증: analysis 테스트 30개 신규(전체 84개, 회귀 없음) / manage.py check 0건 / 실제
+    서버로 수동 시연 — 업로드→격리 디렉토리에 정확히 이 실행 건 소스만 추출 확인→실행
+    (10초, 동기)→SUCCEEDED+raw_result 저장 확인→재실행 시도 409→미할당 일반 사용자
+    list/detail 404, execute 403(IDOR)까지 관통 확인, 데모 데이터는 시연 후 정리
+  - 자체 보안 검토(secure-review) 후 3건 수정 — 커밋 전 반영
+    - zip bomb 방어를 zip 메타데이터 선언값이 아니라 추출 시 실측 바이트 수 기준으로 변경
+      (선언값 위조로 상한 우회 가능했음)
+    - 분석 실행 상태 전환(PENDING/FAILED→RUNNING)을 조건부 UPDATE로 원자화 —
+      동시 실행 요청의 중복 Semgrep 실행 경합 제거
+    - Semgrep 호출에 `--metrics=off` 추가 — 고객 소스코드를 다루는 도구의 기본 텔레메트리 차단
+    - 재검증: analysis 테스트 30개(기존 케이스 포함) 전부 통과
+  - 다음: catalog 앱 — KISA 49개 진단 기준 등록, Semgrep 결과 표준화(raw_result → Finding),
+    결과 조회·심각도 필터 (SFR-012~014, 016~017, DAR-006~007)

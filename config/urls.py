@@ -21,4 +21,5 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),  # SFR-001, SFR-002
     path('api/', include('projects.urls')),  # SFR-004, SFR-005, SFR-006
+    path('api/', include('analysis.urls')),  # SFR-007, SFR-008, SFR-009
 ]

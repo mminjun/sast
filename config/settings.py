@@ -209,6 +209,23 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 
+# 분석 작업 영역 (SEC-007)
+# 업로드 zip·압축 해제된 소스는 여기 아래, 실행(run)별 격리 디렉토리에서만 다룬다.
+# .gitignore의 `/media/` 규칙이 이 경로를 커밋에서 제외한다.
+MEDIA_ROOT = BASE_DIR / 'media'
+ANALYSIS_WORKSPACE_ROOT = MEDIA_ROOT / 'analysis_runs'
+
+# zip 업로드·압축 해제 상한 (SEC-008 — zip bomb 기본 방어)
+ANALYSIS_MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 원본 zip 50MB
+ANALYSIS_MAX_EXTRACTED_SIZE = 100 * 1024 * 1024  # 압축 해제 후 총합 100MB
+ANALYSIS_MAX_EXTRACTED_FILES = 1000
+
+# Semgrep 실행 (SFR-008~009, SEC-009)
+# 룰셋은 catalog 앱에서 KISA 49개 매핑 룰(YAML)이 준비되면 교체한다 (QLT-002, docs/decisions.md).
+ANALYSIS_SEMGREP_CONFIG = 'p/python'
+ANALYSIS_SEMGREP_TIMEOUT = 120  # 초 — 타임아웃 시 FAILED로 기록
+
+
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 

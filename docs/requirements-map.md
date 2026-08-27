@@ -11,10 +11,10 @@
 | SFR-004 | 분석 프로젝트 관리 | ✅ | projects/views.py `ProjectViewSet` | 등록·조회·수정, 삭제 라우트 미생성(mixin 조합) |
 | SFR-005 | 프로젝트 사용자 할당 | ✅ | projects/views.py `members`/`member_detail` | 개별 추가·해제, assigned_by·assigned_at 기록 |
 | SFR-006 | 프로젝트 조회 범위 | ✅ | projects/views.py `get_queryset` | 관리자=전체, 일반=할당분만 |
-| SFR-007 | 분석 대상 소스 관리 | ⬜ | analysis | zip 업로드만 |
-| SFR-008 | 정적 분석 실행 | ⬜ | analysis | 관리자만 |
-| SFR-009 | 분석 처리 체계 | ⬜ | analysis | Semgrep 연계 |
-| SFR-010 | 분석 언어 확장성 | ⬜ | analysis | 구조만, Python 구현 |
+| SFR-007 | 분석 대상 소스 관리 | ✅ | analysis/views.py `ProjectAnalysisRunsView` | zip 업로드, Zip Slip 방어(SEC-008), 관리자만 |
+| SFR-008 | 정적 분석 실행 | ✅ | analysis/views.py `AnalysisRunExecuteView` | 업로드와 분리된 2단계 트리거, 관리자만 |
+| SFR-009 | 분석 처리 체계 | ✅ | analysis/services.py `run_semgrep` | Semgrep subprocess 동기 연계, 룰셋은 임시 `p/python`(catalog에서 KISA 매핑으로 교체 예정) |
+| SFR-010 | 분석 언어 확장성 | 🔨 | analysis | 구조만, Python 구현 (Semgrep 룰셋 교체 가능한 구조까지 확인, 다국어 확장은 비목표) |
 | SFR-011 | 초기 분석 대상 지원 | ❌ | - | Python만 (Java/JS 비목표) |
 | SFR-012 | 진단 항목 등록 | ⬜ | catalog | Semgrep 룰 추가 절차 |
 | SFR-013 | 진단 기준 카탈로그 | ⬜ | catalog | 49개 등록+일부 탐지 |
@@ -30,12 +30,12 @@
 | DAR-002 | 사용자 데이터 | ✅ | accounts/models.py `User` | 이메일 unique, role, 첫 migrate 완료 |
 | DAR-003 | 프로젝트 데이터 | ✅ | projects/models.py `Project` | |
 | DAR-004 | 프로젝트 권한 데이터 | ✅ | projects/models.py `ProjectMember` | 연결 테이블, assigned_by·assigned_at |
-| DAR-005 | 분석 실행 데이터 | ⬜ | analysis/models | |
+| DAR-005 | 분석 실행 데이터 | ✅ | analysis/models.py `AnalysisRun` | workspace_id(UUID)로 격리 디렉토리 명명, raw_result는 Semgrep 원본(표준화는 catalog) |
 | DAR-006 | 진단 결과 데이터 | ⬜ | catalog/models | |
 | DAR-007 | 진단 기준 데이터 | ⬜ | catalog/models | 49개 |
 | DAR-008 | 분석 시점 이력 보존 | ❌ | - | 단순화(심각도·명칭 복사만) |
 | DAR-009 | 구조화된 부가정보 | ⬜ | JSON 필드 | |
-| DAR-010 | 데이터 관계 무결성 | 🔨 | FK 제약 | projects: created_by PROTECT, 멤버십 CASCADE, UniqueConstraint(project,user) 적용. analysis/catalog는 해당 앱에서 |
+| DAR-010 | 데이터 관계 무결성 | 🔨 | FK 제약 | projects: created_by PROTECT, 멤버십 CASCADE, UniqueConstraint(project,user). analysis: project CASCADE, created_by PROTECT, workspace_id unique. catalog는 해당 앱에서 |
 
 ## SEC (보안)
 | 번호 | 이름 | 상태 | 구현 위치 | 비고 |
@@ -46,10 +46,10 @@
 | SEC-004 | 일반 사용자 권한 통제 | ✅ | projects/views.py `get_permissions` | 읽기만 허용, 나머지는 화이트리스트 밖이라 기본 차단. analysis/catalog는 해당 앱에서 추가 적용 필요 |
 | SEC-005 | 프로젝트 소속 검증 | ✅ | projects/views.py `get_queryset` | IDOR 방어 — queryset 스코핑, client project_id 미신뢰, DB 관계로 재검증 |
 | SEC-006 | 비인가 정보 노출 방지 | 🔨 | projects/views.py | 미할당·미존재 프로젝트 응답 동일(404), 쓰기 응답도 id 무관 균일(403) — projects만 적용, 전체 앱 기준 기본 수준은 계속 진행 |
-| SEC-007 | 분석 작업 영역 격리 | ⬜ | analysis | 실행별 디렉토리 |
-| SEC-008 | 파일 경로 검증 | ⬜ | analysis | Zip Slip 방어 |
-| SEC-009 | 분석 실행 보호 | ⬜ | analysis | 타임아웃, 기본 수준 |
-| SEC-010 | 외부 구성요소 관리 | 🔨 | requirements.txt | 직접 의존성 4종 버전 고정 완료, Semgrep 버전·라이선스는 도입 시 |
+| SEC-007 | 분석 작업 영역 격리 | ✅ | analysis/services.py `workspace_dir` | workspace_id+고정 루트로 매번 경로 재계산, 실행별 디렉토리 분리(테스트로 확인) |
+| SEC-008 | 파일 경로 검증 | ✅ | analysis/services.py `_is_unsafe_member` | 절대경로·드라이브문자·`..`·심볼릭링크·resolve() 최종검증 다중 방어, zip bomb 상한(100MB/1000개, 실측값 기준). secure-review로 선언값 트러스트 결함 수정 |
+| SEC-009 | 분석 실행 보호 | ✅ | analysis/services.py `run_semgrep`/`start_run` | Semgrep 타임아웃(120초), 실행 상태 원자적 전환으로 중복 실행 경합 방지(secure-review 수정) |
+| SEC-010 | 외부 구성요소 관리 | ✅ | requirements.txt | 직접 의존성 5종 버전 고정. Semgrep 1.175.0, 라이선스 LGPL-2.1 확인(subprocess 호출만이라 카피레프트 미전이), `--metrics=off`로 텔레메트리 차단 |
 
 ## TST (테스트)
 | 번호 | 이름 | 상태 | 비고 |
@@ -57,7 +57,7 @@
 | TST-001 | 인증 기능 시험 | ✅ | accounts/tests.py — 로그인 성공/실패, 미인증 401, bcrypt 저장 |
 | TST-002 | 역할 권한 시험 | ✅ | accounts/tests.py — 일반 사용자 403, 역할 강등 즉시 반영. 시연 필수 |
 | TST-003 | 프로젝트 접근 시험 | ✅ | projects/tests.py `IdorDefenseTests` 등 22개. curl 수동 시연: 할당 200 / 미할당·미존재 동일 404 / 쓰기 균일 403 |
-| TST-004 | 분석 처리 시험 | ⬜ | 파이프라인 관통 |
+| TST-004 | 분석 처리 시험 | ✅ | analysis/tests.py 30개 + 실서버 수동 시연 | 업로드→압축해제→Semgrep 실행→결과조회 관통 확인, IDOR·Zip Slip·상태전이 포함 |
 | TST-005 | 진단 항목 시험 | ⬜ | 취약/정상 샘플, 시연 핵심 |
 | TST-006 | 카탈로그 시험 | ⬜ | |
 | TST-007 | 분석 결과 관리 시험 | ⬜ | |
@@ -66,7 +66,7 @@
 ## QLT (품질)
 | 번호 | 이름 | 상태 | 비고 |
 |---|---|---|---|
-| QLT-001 | 모듈화 | 🔨 | accounts(완료)·projects(완료) 책임 분리 확인, analysis/catalog는 구현 시 |
+| QLT-001 | 모듈화 | 🔨 | accounts·projects·analysis 책임 분리 확인(analysis는 projects 모델만 참조, 뷰 로직 미공유), catalog는 구현 시 |
 | QLT-002 | 진단 항목 독립성 | ⬜ | Semgrep 룰 구조로 충족 |
 | QLT-003 | 확장성 | ⬜ | SFR-010과 동일 |
 | QLT-004 | 결과 일관성 | ⬜ | 정규화 계층 |
