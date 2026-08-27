@@ -38,3 +38,27 @@
     - 로그아웃 시 refresh 토큰 소유자 검증, 실패 응답은 통일
     - 재검증: 테스트 22개(신규 7개 포함) 전부 통과
   - 다음: projects 앱 — 프로젝트·할당 테이블 + IDOR 방어(SEC-005)
+
+## 2026-08-27
+- projects 앱 구현 (SFR-004~006, DAR-003~004, SEC-003~006, TST-003)
+  - Project(DAR-003) + ProjectMember(DAR-004, through 테이블) 모델. created_by는 PROTECT,
+    멤버십은 CASCADE, UniqueConstraint(project, user)로 중복 할당 DB 차원 차단
+  - ProjectViewSet: ModelViewSet 대신 mixin 조합(Create/List/Retrieve/Update)으로
+    삭제 라우트 자체를 미생성(비목표를 라우트 부재로 표현), PUT 제외 PATCH만 허용
+  - IDOR 방어(SEC-005) 핵심: get_queryset()에서 관리자=전체/일반=할당분만 스코핑 →
+    상세·수정·할당이 전부 이 queryset을 거치는 get_object()라 URL의 project_id 조작으로
+    스코프 밖에 도달 불가. get_permissions()는 화이트리스트(list/retrieve만 인증, 나머지
+    전부 IsAdminRole)라 기본 차단(SEC-003/004 실제 적용 완료)
+  - 응답 정책: 미할당·미존재 프로젝트 GET → 동일 404(존재 은닉), 쓰기 실패는 id 무관 균일
+    403 (SEC-006)
+  - 할당 API: 개별 추가/해제 — POST/DELETE /api/projects/{id}/members/(/{user_id}/)
+  - 신규 테이블 없음, 신규 의존성 없음. 마이그레이션 1개(projects.0001_initial)
+  - 검증: 테스트 54개 전부 통과(신규 32개, 기존 22개 회귀 없음) / manage.py check 0건 /
+    psql로 projects_project·projects_project_member 2개 테이블·FK·unique 제약 확인 /
+    수동 IDOR 시연(curl) — 할당 프로젝트 200 / 미할당·미존재 프로젝트 동일 404 /
+    목록이 할당분만 반환 / 미할당 프로젝트 PATCH 403, 데모 데이터는 시연 후 정리
+  - 자체 보안 검토(secure-review) 후 1건 수정 — 커밋 전 반영
+    - ProjectViewSet에 lookup_value_regex=r'\d+' 추가: 숫자가 아닌 pk가 500 대신 404가
+      되도록 (member_detail 액션과 비대칭이던 부분을 통일)
+    - 재검증: 테스트 54개(신규 1개 포함) 전부 통과
+  - 다음: analysis 앱 — zip 업로드 → Semgrep 실행 파이프라인 (SFR-007~009, SEC-007~008)
