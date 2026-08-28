@@ -201,7 +201,11 @@ export default function ProjectDetailPage() {
               <option value="">할당할 사용자 선택</option>
               {allUsers
                 ?.filter(
-                  (u) => u.is_active && !members?.some((m) => m.user.id === u.id)
+                  // admin은 스코프상 전체 조회라 할당이 무의미 — 일반 계정만 후보로.
+                  (u) =>
+                    u.role !== 'ADMIN' &&
+                    u.is_active &&
+                    !members?.some((m) => m.user.id === u.id)
                 )
                 .map((u) => (
                   <option key={u.id} value={u.id}>
