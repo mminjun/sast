@@ -359,6 +359,23 @@ select:focus {
   flex-wrap: wrap;
 }
 
+.severity-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.severity-legend-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.severity-legend .muted {
+  margin: 0.35rem 0 0;
+}
+
 .chip {
   padding: 0.25rem 0.75rem;
   border: 1px solid var(--border);

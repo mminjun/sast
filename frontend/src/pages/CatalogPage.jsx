@@ -77,6 +77,28 @@ export default function CatalogPage() {
         />
       </div>
 
+      {/* 등급 의미는 서버 데이터가 아니라 등급 정책(docs/decisions.md 2026-08-27)의 요약 —
+          정책이 바뀌면 여기도 함께 고친다. label은 severity_label과 같은 한글 표기. */}
+      <div className="card severity-legend">
+        <div className="severity-legend-row">
+          <SeverityBadge severity="HIGH" label="높음" />
+          <span>성공 시 그 자체로 침해가 완성 (원격 코드 실행·인증 우회·자격증명 직접 노출)</span>
+        </div>
+        <div className="severity-legend-row">
+          <SeverityBadge severity="MEDIUM" label="보통" />
+          <span>단독으론 제한적, 추가 조건이나 후속 공격의 발판이 되는 간접 영향</span>
+        </div>
+        <div className="severity-legend-row">
+          <SeverityBadge severity="LOW" label="낮음" />
+          <span>직접 악용 경로가 아닌 코드 품질·방어적 개선 수준</span>
+        </div>
+        <p className="muted small">
+          KISA 가이드는 항목을 유형으로만 분류하므로 심각도는 악용에 추가 조건이 필요한지를
+          기준으로 개발자가 부여했습니다. 카탈로그에 매핑되지 않은 탐지는 Semgrep 기본 등급을
+          따르고, 그마저 불명확하면 누락 방지를 위해 보통으로 둡니다.
+        </p>
+      </div>
+
       {error && <p className="form-error">{error}</p>}
       {rules === null && !error && <p className="muted">불러오는 중…</p>}
       {rules?.length === 0 && <p className="muted">조건에 맞는 진단 기준이 없습니다.</p>}
