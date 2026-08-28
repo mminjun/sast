@@ -84,6 +84,23 @@ rules:
       - pattern-not: os.system("...")
       - pattern-not: os.popen("...")
 
+  - id: kisa-iv-07-open-redirect
+    languages: [python]
+    severity: WARNING
+    message: >-
+      신뢰되지 않는 URL 주소로 자동접속 연결 (KISA-IV-07). 외부 입력을 검증 없이
+      리다이렉트 대상으로 쓰면 피싱·악성 사이트 유도에 악용됩니다. 허용 목록으로
+      대상 경로를 제한하세요.
+    metadata:
+      kisa_code: KISA-IV-07
+      kisa_name: 신뢰되지 않는 URL 주소로 자동접속 연결
+      cwe: CWE-601
+    pattern-either:
+      - pattern: redirect(request.$P.get(...), ...)
+      - pattern: redirect(request.$P[...], ...)
+      - pattern: HttpResponseRedirect(request.$P.get(...), ...)
+      - pattern: HttpResponseRedirect(request.$P[...], ...)
+
   - id: kisa-iv-11-csrf-exempt
     languages: [python]
     severity: WARNING

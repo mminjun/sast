@@ -45,6 +45,25 @@ rules:
       - pattern-not: $NAME = ""
       - pattern-not: $FUNC(..., $NAME="", ...)
 
+  - id: kisa-sf-07-insufficient-key-length
+    languages: [python]
+    severity: WARNING
+    message: >-
+      충분하지 않은 키 길이 사용 (KISA-SF-07). 2048비트 미만 RSA/DSA 키는 전수 대입으로
+      복호화될 수 있습니다. 2048비트 이상(권장 3072+)으로 생성하세요.
+    metadata:
+      kisa_code: KISA-SF-07
+      kisa_name: 충분하지 않은 키 길이 사용
+      cwe: CWE-326
+    patterns:
+      - pattern-either:
+          - pattern: RSA.generate($BITS, ...)
+          - pattern: rsa.generate_private_key(..., key_size=$BITS, ...)
+          - pattern: dsa.generate_private_key(..., key_size=$BITS, ...)
+      - metavariable-comparison:
+          metavariable: $BITS
+          comparison: $BITS < 2048
+
   - id: kisa-sf-08-insecure-random
     languages: [python]
     severity: WARNING
@@ -78,6 +97,43 @@ rules:
       - pattern: ssl._create_unverified_context(...)
       - pattern: $CTX.check_hostname = False
       - pattern: $CTX.verify_mode = ssl.CERT_NONE
+
+  - id: kisa-sf-12-persistent-sensitive-cookie
+    languages: [python]
+    severity: WARNING
+    message: >-
+      사용자 하드디스크에 저장되는 쿠키를 통한 정보 노출 (KISA-SF-12). max_age/expires를
+      준 쿠키는 디스크에 남아 로컬 접근자에게 노출됩니다. 인증·세션 값은 만료를 지정하지
+      않은 세션 쿠키로 두세요.
+    metadata:
+      kisa_code: KISA-SF-12
+      kisa_name: 사용자 하드디스크에 저장되는 쿠키를 통한 정보 노출
+      cwe: CWE-539
+    patterns:
+      # 민감한 이름의 쿠키가 영속(만료 지정)으로 저장될 때만 잡는다 — 테마 설정 같은
+      # 비민감 영속 쿠키까지 걸면 오탐이 대부분이 된다 (SF-08과 같은 이름 기반 한정).
+      - pattern-either:
+          - pattern: $RESP.set_cookie($NAME, ..., max_age=$AGE, ...)
+          - pattern: $RESP.set_cookie($NAME, ..., expires=$EXP, ...)
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^["'][a-z_-]*(token|session|auth|password|passwd|secret|remember)[a-z_-]*["']$
+
+  - id: kisa-sf-13-secret-in-comment
+    languages: [python]
+    severity: WARNING
+    message: >-
+      주석문 안에 포함된 시스템 주요정보 (KISA-SF-13). 주석에 적힌 비밀번호·키는 소스
+      열람만으로 노출됩니다. 값은 지우고 시크릿 저장소·환경변수 위치만 남기세요.
+    metadata:
+      kisa_code: KISA-SF-13
+      kisa_name: 주석문 안에 포함된 시스템 주요정보
+      cwe: CWE-615
+    # AST 패턴은 주석을 보지 못하므로 이 룰만 원문 정규식으로 잡는다.
+    # '# … 키워드 = 값' 형태(값 대입까지 있는 경우)로 한정해, 키워드 단어가
+    # 설명으로만 등장하는 일반 주석은 걸리지 않게 한다 (오탐 억제).
+    patterns:
+      - pattern-regex: '#.*?(?i:password|passwd|pwd|secret|api[_-]?key|token)\s*[:=]\s*\S+'
 
   - id: kisa-sf-14-unsalted-password-hash
     languages: [python]

@@ -19,7 +19,10 @@ import urllib.request
 
 import requests
 import yaml
+from Crypto.PublicKey import RSA
+from cryptography.hazmat.primitives.asymmetric import rsa
 from django.http import JsonResponse
+from django.shortcuts import redirect
 from django.views.decorators.csrf import csrf_exempt
 
 DEBUG = True  # KISA-EH-01
@@ -127,6 +130,27 @@ def legacy_submit(request):
 def append_log(line):
     log = open("app.log", "a")  # KISA-CE-02
     log.write(line)
+
+
+def go_next(request):
+    return redirect(request.GET.get("next"))  # KISA-IV-07
+
+
+# TODO: 운영 배포 전에 임시 DB password = p@ssw0rd-2024 를 회수할 것  # KISA-SF-13
+
+
+def remember_login(token):
+    resp = JsonResponse({"ok": True})
+    resp.set_cookie("auth_token", token, max_age=60 * 60 * 24 * 30)  # KISA-SF-12
+    return resp
+
+
+def make_signing_key():
+    return RSA.generate(1024)  # KISA-SF-07
+
+
+def make_tls_key():
+    return rsa.generate_private_key(public_exponent=65537, key_size=1024)  # KISA-SF-07
 
 
 def do_work():

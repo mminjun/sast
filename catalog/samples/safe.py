@@ -19,9 +19,14 @@ from pathlib import Path
 import bcrypt
 import requests
 import yaml
+from Crypto.PublicKey import RSA
+from cryptography.hazmat.primitives.asymmetric import rsa
 from django.http import JsonResponse
+from django.shortcuts import redirect
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_NEXT = {"/dashboard", "/projects"}
 
 DEBUG = os.getenv("DJANGO_DEBUG", "").lower() == "true"
 
@@ -152,6 +157,34 @@ def append_log(line):
     # with 문으로 열어 블록을 벗어나면 반드시 닫힌다
     with open("app.log", "a", encoding="utf-8") as log:
         log.write(line)
+
+
+def go_next(request):
+    # 허용 목록으로 대상 경로를 제한한 뒤에만 이동
+    target = request.GET.get("next", "/dashboard")
+    if target not in ALLOWED_NEXT:
+        target = "/dashboard"
+    return redirect(target)
+
+
+# DB 비밀번호는 환경변수 POSTGRES_PASSWORD에서 읽는다 — 값은 소스·주석에 적지 않는다
+
+
+def remember_login(request, token):
+    resp = JsonResponse({"ok": True})
+    # 인증 값은 만료를 지정하지 않은 세션 쿠키로 — 브라우저 종료 시 소멸
+    resp.set_cookie("auth_token", token, httponly=True, secure=True)
+    # 영속 쿠키는 비민감 설정값에만 쓴다
+    resp.set_cookie("theme", "dark", max_age=60 * 60 * 24 * 30)
+    return resp
+
+
+def make_signing_key():
+    return RSA.generate(4096)
+
+
+def make_tls_key():
+    return rsa.generate_private_key(public_exponent=65537, key_size=4096)
 
 
 def do_work():

@@ -56,16 +56,19 @@ SEVERITY_COUNTS = {'HIGH': 26, 'MEDIUM': 20, 'LOW': 3}
 
 # 실탐지 룰이 붙은 항목 (선정 근거는 docs/decisions.md — 8/27 최초 13개, 8/29 확장).
 IMPLEMENTED_CODES = {
-    'KISA-IV-01', 'KISA-IV-02', 'KISA-IV-03', 'KISA-IV-05', 'KISA-IV-11', 'KISA-IV-12',
-    'KISA-SF-04', 'KISA-SF-06', 'KISA-SF-08', 'KISA-SF-11', 'KISA-SF-14',
+    'KISA-IV-01', 'KISA-IV-02', 'KISA-IV-03', 'KISA-IV-05', 'KISA-IV-07', 'KISA-IV-11',
+    'KISA-IV-12',
+    'KISA-SF-04', 'KISA-SF-06', 'KISA-SF-07', 'KISA-SF-08', 'KISA-SF-11', 'KISA-SF-12',
+    'KISA-SF-13', 'KISA-SF-14',
     'KISA-CE-02', 'KISA-CE-05', 'KISA-EH-01', 'KISA-EH-03', 'KISA-EN-02',
     'KISA-AA-02',
 }
-# 취약 샘플에서 나와야 하는 룰별 건수. 총 26건.
+# 취약 샘플에서 나와야 하는 룰별 건수. 총 31건.
 EXPECTED_SAMPLE_FINDINGS = {
-    'KISA-IV-01': 1, 'KISA-IV-02': 1, 'KISA-IV-03': 1, 'KISA-IV-05': 2, 'KISA-IV-11': 1,
-    'KISA-IV-12': 2,
-    'KISA-SF-04': 1, 'KISA-SF-06': 2, 'KISA-SF-08': 1, 'KISA-SF-11': 2, 'KISA-SF-14': 1,
+    'KISA-IV-01': 1, 'KISA-IV-02': 1, 'KISA-IV-03': 1, 'KISA-IV-05': 2, 'KISA-IV-07': 1,
+    'KISA-IV-11': 1, 'KISA-IV-12': 2,
+    'KISA-SF-04': 1, 'KISA-SF-06': 2, 'KISA-SF-07': 2, 'KISA-SF-08': 1, 'KISA-SF-11': 2,
+    'KISA-SF-12': 1, 'KISA-SF-13': 1, 'KISA-SF-14': 1,
     'KISA-CE-02': 1, 'KISA-CE-05': 2, 'KISA-EH-01': 2, 'KISA-EH-03': 2, 'KISA-EN-02': 2,
     'KISA-AA-02': 2,
 }
