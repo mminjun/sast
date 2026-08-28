@@ -17,7 +17,7 @@
 | SFR-010 | 분석 언어 확장성 | ✅ | catalog/rules + catalog 전반 | 구조로 충족 — 카탈로그 49개는 언어 중립, 탐지는 룰 YAML 추가만으로 확장(파서·모델·API에 언어 분기 없음), 엔진이 다중 언어 지원. 실제 2번째 언어 룰은 미작성(범위 선택, plan.md §5) |
 | SFR-011 | 초기 분석 대상 지원 | ❌ | - | Python만 (Java/JS 비목표) |
 | SFR-012 | 진단 항목 등록 | ✅ | catalog/management/commands/seed_catalog.py | 룰 YAML 1개 추가 + 시드 재실행이면 코드 수정 없이 카탈로그 반영. kisa_code 오타는 시드 시점에 실패(드리프트 감지) |
-| SFR-013 | 진단 기준 카탈로그 | ✅ | catalog/models.py `DiagnosticRule` + `/api/catalog/rules/` + frontend `CatalogPage` | 49개 전부 등록, 그중 13개 실탐지. 유형·심각도·구현여부 필터, `/api/catalog/summary/` 집계. 49개 표시·필터 UI 완결(8/28) |
+| SFR-013 | 진단 기준 카탈로그 | ✅ | catalog/models.py `DiagnosticRule` + `/api/catalog/rules/` + frontend `CatalogPage` | 49개 전부 등록, 그중 13개 실탐지. 유형·심각도·구현여부 필터, `/api/catalog/summary/` 집계. 49개 표시·필터 UI 완결(8/28). 심각도 범례 카드(등급 정책·폴백 각주, 8/29) |
 | SFR-014 | 분석 결과 표준화 | ✅ | catalog/services.py `ingest_findings` | raw_result → Finding. 실행 성공 시 시그널로 자동 연결, 멱등. 관리자용 재표준화 API 별도 |
 | SFR-015 | 분석 실행 상태 관리 | ✅ | analysis/models.py `AnalysisStatus` + frontend `StatusBadge` | 대기/실행중/완료/실패 4상태. 원자적 전환으로 RUNNING 관측 가능. 4상태 배지 UI 표시(8/28) |
 | SFR-016 | 분석 결과 조회 | ✅ | catalog/views.py `RunFindingListView`/`RunFindingSummaryView` + frontend `RunDetailPage` | 실행별 결과 목록 + 심각도·항목별 집계. 심각도 높은 순 정렬. 집계 카드·목록·코드조각 UI 완결(8/28) |
@@ -32,7 +32,7 @@
 | DAR-004 | 프로젝트 권한 데이터 | ✅ | projects/models.py `ProjectMember` | 연결 테이블, assigned_by·assigned_at |
 | DAR-005 | 분석 실행 데이터 | ✅ | analysis/models.py `AnalysisRun` | workspace_id(UUID)로 격리 디렉토리 명명, raw_result는 Semgrep 원본 |
 | DAR-006 | 진단 결과 데이터 | ✅ | catalog/models.py `Finding` (`catalog_finding`) | 표준화된 결과. file_path는 격리 루트 기준 상대경로, semgrep_check_id는 접두사 제거 후 저장 |
-| DAR-007 | 진단 기준 데이터 | ✅ | catalog/models.py `DiagnosticRule` (`catalog_rule`) | KISA 49개. code unique, severity_reason으로 등급 근거 보관 |
+| DAR-007 | 진단 기준 데이터 | ✅ | catalog/models.py `DiagnosticRule` (`catalog_rule`) | KISA 49개. code unique, severity_reason으로 등급 근거 보관 — 49개 전체 완비(8/29, 실탐지 13개→전체 확장) |
 | DAR-008 | 분석 시점 이력 보존 | ❌ | catalog/models.py `Finding` 스냅샷 컬럼 | 단순화 — rule_code·rule_name·severity만 복사(전체 이력 테이블 비목표) |
 | DAR-009 | 구조화된 부가정보 | ✅ | JSONField | `DiagnosticRule.semgrep_rule_ids`/`extra`, `Finding.extra`(cwe·kisa_name·semgrep_severity) |
 | DAR-010 | 데이터 관계 무결성 | ✅ | FK 제약 + 인덱스 | projects: created_by PROTECT, 멤버십 CASCADE, UniqueConstraint(project,user). analysis: project CASCADE, created_by PROTECT, workspace_id unique. catalog: run CASCADE, rule PROTECT(미매핑 허용 null), code unique, (run,severity)·(run,rule) 인덱스 |
