@@ -17,7 +17,7 @@
 | SFR-010 | 분석 언어 확장성 | ✅ | catalog/rules + catalog 전반 | 구조로 충족 — 카탈로그 49개는 언어 중립, 탐지는 룰 YAML 추가만으로 확장(파서·모델·API에 언어 분기 없음), 엔진이 다중 언어 지원. 실제 2번째 언어 룰은 미작성(범위 선택, plan.md §5) |
 | SFR-011 | 초기 분석 대상 지원 | ❌ | - | Python만 (Java/JS 비목표) |
 | SFR-012 | 진단 항목 등록 | ✅ | catalog/management/commands/seed_catalog.py | 룰 YAML 1개 추가 + 시드 재실행이면 코드 수정 없이 카탈로그 반영. kisa_code 오타는 시드 시점에 실패(드리프트 감지) |
-| SFR-013 | 진단 기준 카탈로그 | ✅ | catalog/models.py `DiagnosticRule` + `/api/catalog/rules/` + frontend `CatalogPage` | 49개 전부 등록, 그중 13개 실탐지. 유형·심각도·구현여부 필터, `/api/catalog/summary/` 집계. 49개 표시·필터 UI 완결(8/28). 심각도 범례 카드(등급 정책·폴백 각주, 8/29) |
+| SFR-013 | 진단 기준 카탈로그 | ✅ | catalog/models.py `DiagnosticRule` + `/api/catalog/rules/` + frontend `CatalogPage` | 49개 전부 등록, 그중 21개 실탐지(8/29 룰 8개 추가). 유형·심각도·구현여부 필터, `/api/catalog/summary/` 집계. 49개 표시·필터 UI 완결(8/28). 심각도 범례 카드(등급 정책·폴백 각주, 8/29) |
 | SFR-014 | 분석 결과 표준화 | ✅ | catalog/services.py `ingest_findings` | raw_result → Finding. 실행 성공 시 시그널로 자동 연결, 멱등. 관리자용 재표준화 API 별도 |
 | SFR-015 | 분석 실행 상태 관리 | ✅ | analysis/models.py `AnalysisStatus` + frontend `StatusBadge` | 대기/실행중/완료/실패 4상태. 원자적 전환으로 RUNNING 관측 가능. 4상태 배지 UI 표시(8/28) |
 | SFR-016 | 분석 결과 조회 | ✅ | catalog/views.py `RunFindingListView`/`RunFindingSummaryView` + frontend `RunDetailPage` | 실행별 결과 목록 + 심각도·항목별 집계. 심각도 높은 순 정렬. 집계 카드·목록·코드조각 UI 완결(8/28) |
@@ -58,7 +58,7 @@
 | TST-002 | 역할 권한 시험 | ✅ | accounts/tests.py — 일반 사용자 403, 역할 강등 즉시 반영. 시연 필수. + 브라우저 E2E — 일반 계정에 관리 버튼 미노출, 프로젝트 생성 시도 403(8/28). + 사용자 관리 API 권한 29개 케이스(미인증 401, 일반 균일 403, 강등 즉시 403, role 강제, 자기 자신·마지막 admin·409, 비활성화 즉시 효력)(8/28 저녁) |
 | TST-003 | 프로젝트 접근 시험 | ✅ | projects/tests.py `IdorDefenseTests` 등 22개. curl 수동 시연: 할당 200 / 미할당·미존재 동일 404 / 쓰기 균일 403. + 브라우저 E2E — 미할당 프로젝트 목록 숨김 + 상세 URL 직접 접근 404(IDOR 차단)(8/28) |
 | TST-004 | 분석 처리 시험 | ✅ | analysis/tests.py 30개 + 실서버 수동 시연 — 업로드→압축해제→Semgrep 실행→결과조회 관통 |
-| TST-005 | 진단 항목 시험 | ✅ | catalog/tests.py `DetectionSampleTests` — 실제 Semgrep으로 `catalog/samples/vulnerable.py` 정탐 20건/13룰, `safe.py` **오탐 0건**. 시연 핵심 |
+| TST-005 | 진단 항목 시험 | ✅ | catalog/tests.py `DetectionSampleTests` — 실제 Semgrep으로 `catalog/samples/vulnerable.py` 정탐 31건/21룰(8/29 확장), `safe.py` **오탐 0건**. 시연 핵심 |
 | TST-006 | 카탈로그 시험 | ✅ | catalog/tests.py `SeedCatalogTests`·`SeedValidationTests`·`CatalogReadTests` — 49개 등록·유형 분포·멱등·드리프트 감지·조회 필터 |
 | TST-007 | 분석 결과 관리 시험 | ✅ | catalog/tests.py `IngestTests`·`FindingReadTests`·`ReingestTests`·`PaginationTests` — 변환·멱등·필터·집계·재표준화 |
 | TST-008 | 오류 처리 시험 | 🔨 | 기본 수준 — 잘못된 필터 400, 원본 없는 재표준화 409, 미존재 404, 표준화 실패 시 실행 보존+로그. 통일 에러 응답 포맷은 미정 |
