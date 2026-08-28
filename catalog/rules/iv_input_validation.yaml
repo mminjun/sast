@@ -84,6 +84,43 @@ rules:
       - pattern-not: os.system("...")
       - pattern-not: os.popen("...")
 
+  - id: kisa-iv-07-open-redirect
+    languages: [python]
+    severity: WARNING
+    message: >-
+      신뢰되지 않는 URL 주소로 자동접속 연결 (KISA-IV-07). 외부 입력을 검증 없이
+      리다이렉트 대상으로 쓰면 피싱·악성 사이트 유도에 악용됩니다. 허용 목록으로
+      대상 경로를 제한하세요.
+    metadata:
+      kisa_code: KISA-IV-07
+      kisa_name: 신뢰되지 않는 URL 주소로 자동접속 연결
+      cwe: CWE-601
+    pattern-either:
+      - pattern: redirect(request.$P.get(...), ...)
+      - pattern: redirect(request.$P[...], ...)
+      - pattern: HttpResponseRedirect(request.$P.get(...), ...)
+      - pattern: HttpResponseRedirect(request.$P[...], ...)
+
+  - id: kisa-iv-11-csrf-exempt
+    languages: [python]
+    severity: WARNING
+    message: >-
+      크로스사이트 요청 위조 (KISA-IV-11). csrf_exempt는 해당 뷰의 CSRF 방어를 통째로
+      끕니다. 꼭 필요한 예외가 아니라면 제거하고 CSRF 미들웨어 보호를 유지하세요.
+    metadata:
+      kisa_code: KISA-IV-11
+      kisa_name: 크로스사이트 요청 위조
+      cwe: CWE-352
+    pattern-either:
+      - pattern: |
+          @csrf_exempt
+          def $FUNC(...):
+            ...
+      - pattern: |
+          @method_decorator(csrf_exempt, ...)
+          class $CLS(...):
+            ...
+
   - id: kisa-iv-12-ssrf
     languages: [python]
     severity: ERROR

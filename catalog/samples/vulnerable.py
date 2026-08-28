@@ -14,11 +14,16 @@ import pickle
 import random
 import ssl
 import subprocess
+import tempfile
 import urllib.request
 
 import requests
 import yaml
+from Crypto.PublicKey import RSA
+from cryptography.hazmat.primitives.asymmetric import rsa
 from django.http import JsonResponse
+from django.shortcuts import redirect
+from django.views.decorators.csrf import csrf_exempt
 
 DEBUG = True  # KISA-EH-01
 
@@ -93,6 +98,59 @@ def handler(request):
 def debug_here():
     pdb.set_trace()  # KISA-EN-02
     breakpoint()  # KISA-EN-02
+
+
+def cleanup_quietly(path):
+    try:  # KISA-EH-03 (bare except + pass)
+        os.remove(path)
+    except:
+        pass
+
+
+def parse_amount(value):
+    try:  # KISA-EH-03 (예외 삼킴)
+        return int(value)
+    except Exception:
+        pass
+
+
+def make_temp_file():
+    return tempfile.mktemp()  # KISA-AA-02
+
+
+def open_tls(sock):
+    return ssl.wrap_socket(sock)  # KISA-AA-02
+
+
+@csrf_exempt  # KISA-IV-11
+def legacy_submit(request):
+    return JsonResponse({"ok": True})
+
+
+def append_log(line):
+    log = open("app.log", "a")  # KISA-CE-02
+    log.write(line)
+
+
+def go_next(request):
+    return redirect(request.GET.get("next"))  # KISA-IV-07
+
+
+# TODO: 운영 배포 전에 임시 DB password = p@ssw0rd-2024 를 회수할 것  # KISA-SF-13
+
+
+def remember_login(token):
+    resp = JsonResponse({"ok": True})
+    resp.set_cookie("auth_token", token, max_age=60 * 60 * 24 * 30)  # KISA-SF-12
+    return resp
+
+
+def make_signing_key():
+    return RSA.generate(1024)  # KISA-SF-07
+
+
+def make_tls_key():
+    return rsa.generate_private_key(public_exponent=65537, key_size=1024)  # KISA-SF-07
 
 
 def do_work():
