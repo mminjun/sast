@@ -19,6 +19,7 @@ export default function Layout() {
         <nav>
           <NavLink to="/projects">프로젝트</NavLink>
           <NavLink to="/catalog">진단 기준</NavLink>
+          {isAdmin && <NavLink to="/users">사용자 관리</NavLink>}
         </nav>
         <div className="topbar-user">
           <span className="user-email">{user?.email}</span>
