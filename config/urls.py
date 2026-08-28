@@ -20,6 +20,7 @@ from django.urls import include, path
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),  # SFR-001, SFR-002
+    path('api/users/', include('accounts.user_urls')),  # SEC-003 (관리자용 사용자 관리)
     path('api/', include('projects.urls')),  # SFR-004, SFR-005, SFR-006
     path('api/', include('analysis.urls')),  # SFR-007, SFR-008, SFR-009
     path('api/', include('catalog.urls')),  # SFR-013, SFR-014, SFR-016, SFR-017

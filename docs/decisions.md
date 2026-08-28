@@ -386,3 +386,48 @@ Semgrep 문서만 읽어서는 예측할 수 없고, 실제로 돌려 JSON을 �
 - 로그아웃 호출은 갱신·재시도 없이(noAuthRetry) | access 만료 상태에서 갱신을 거치면
   본문의 refresh가 rotation으로 폐기된 값이 되어 blacklist가 조용히 실패하고 새 refresh만
   서버에 남는다. 그 경우 로컬 정리만 하는 편이 토큰을 한 번 더 회전시키는 것보다 낫다 | SFR-002
+
+## 2026-08-28 (사용자 관리)
+
+- **사용자 관리 API(/api/users/)는 자가 등록이 아니라 관리자 통제 모델의 UI화** |
+  "회원가입 API 없음"(8/26) 결정은 그대로 유지된다 — 전 엔드포인트가
+  IsAuthenticated+IsAdminRole로 닫혀 있어 공개 가입 경로는 여전히 없다. shell로 하던
+  계정 관리(8/28 오전 파이프 사고가 위험을 보여줌)를 UI로 올린 것 | SEC-003, SFR-005
+- 삭제 정책: 물리 삭제 + 비활성화(is_active) 병행 (사용자 확정) | User를 참조하는 PROTECT
+  FK 3종(Project.created_by, AnalysisRun.created_by, ProjectMember.assigned_by) 때문에
+  활동 이력 있는 계정은 물리 삭제가 DB 차원에서 막힌다. ProtectedError는 409로 변환해
+  "대신 비활성화" 안내. 멤버십(ProjectMember.user, CASCADE)만 있는 계정은 실삭제 가능하고
+  멤버십이 함께 지워진다 — '이력'의 정의를 테스트로 고정 | SEC-003, DAR-010
+- 상태 코드: 400과 409를 구분 | 400 = 조작 자체가 규칙상 금지(자기 자신, 마지막 활성
+  관리자 — 관리 기능 접근 경로가 통째로 사라지는 상태 방지). 409 = 데이터 상태 때문에
+  지금은 불가하지만 우회(비활성화)가 존재. 프론트는 409만 별도 안내 문구로 분기한다.
+  비관리자는 permission 검사가 객체 조회보다 먼저라 id와 무관하게 균일 403(기존 관례) | SEC-006
+- 생성 계정의 role 강제는 검사문이 아니라 쓰기 경로 부재로 | UserCreateSerializer에서
+  role·is_active를 read_only로 선언 — 본문에 실려 와도 필드에 도달하지 못한다(mass
+  assignment 방지). 활성 토글 PATCH도 is_active 하나뿐인 전용 Serializer라 같은 원리.
+  본문에 role=ADMIN을 실어 보내는 케이스를 테스트·E2E 양쪽에서 확인 | SEC-003, SEC-004
+- 마지막 활성 관리자 검사: select_for_update로 대상+활성 관리자 전원을 pk 순서로 잠금 |
+  대상만 잠그면 두 관리자가 서로를 동시에 제거해 관리자 0명이 되는 경합이 남는다.
+  실행 상태 원자적 전환(SEC-009)·재표준화 직렬화와 같은 유형의 경합, 같은 방식의 방어 | SEC-009
+- 비밀번호 정책은 validate_password 명시 호출로 적용 | AUTH_PASSWORD_VALIDATORS는 DRF
+  시리얼라이저에 자동 적용되지 않는다 — 호출하지 않으면 설정만 있고 동작하지 않는
+  상태가 된다. 미저장 User 인스턴스를 넘겨 이메일 유사성 검증까지 동작시킨다 | SEC-001
+- 비활성화 즉시 효력은 추가 코드 없이 성립 | simplejwt JWTAuthentication이 매 요청 DB의
+  is_active를 확인하므로 이미 발급된 access 토큰도 다음 요청부터 401이다. 코드가 아니라
+  테스트(발급 access로 me 401)와 실서버 E2E로 고정했다. 로그인도 401 | SEC-003, SFR-002
+- 사용자 관리 URL은 accounts 앱 소속 유지 + 별도 모듈(accounts/user_urls.py) | 인증
+  경로(/api/auth/)에 섞으면 의미가 흐려지고, 새 앱을 만들면 사용자 모델과 책임이
+  분리된다. 앱은 그대로 두고 URL prefix만 /api/users/로 분리 | QLT-001
+- 할당·해제 UI는 사용자 관리 페이지가 아니라 프로젝트 상세에 (사용자 확정) | 기존
+  members API가 프로젝트 스코프(GET/POST /api/projects/{id}/members/)라 1:1로 대응 —
+  백엔드 무수정. 사용자별 할당 뷰를 만들려면 신규 API가 필요해 범위 증가 | SFR-005
+
+### 자체 보안 검토(secure-review) 후속 수정 — 2026-08-28 (사용자 관리)
+
+- 생성 password 필드에 max_length=128 | 상한 없는 CharField는 수 MB짜리 비밀번호도
+  받는다. 요청 크기 상한(Django 2.5MB)과 BCryptSHA256의 SHA256 전처리 덕에 실질 위험은
+  낮지만, 받을 이유가 없는 입력은 필드 수준에서 막는다 | SEC-001
+- 프론트 검토 참고 2건(수정 없음): 멤버 할당 셀렉트가 비활성 사용자를 숨기는 것은 UI
+  편의일 뿐 서버(members API)는 막지 않는다 — 비활성 사용자는 로그인 자체가 불가해
+  실익이 없는 상태라 서버 정책 강화는 별도 결정으로 미룬다(members API 무수정 원칙).
+  삭제 확인은 window.confirm(프로젝트 첫 사용례, MVP 수준) | SEC-003

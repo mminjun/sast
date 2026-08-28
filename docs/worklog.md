@@ -200,3 +200,27 @@
   - requirements-map.md를 8/28 기준으로 갱신 — 위 항목들의 구현 위치에 frontend 페이지
     추가, E2E 근거 표기, 비목표(SFR-011, 멤버 할당 UI) 사유 유지
   - 다음: 시연 리허설(9/3 최종 발표), 발표 자료에 E2E 시나리오 반영
+- 저녁 — admin 전용 사용자 관리 (SEC-003, SFR-005, SEC-001, TST-002)
+  - 오전 shell 파이프 사고가 동기 — shell로 하던 계정 관리를 UI로. 범위는 계획 승인으로
+    확정: 일반 계정 생성 / 삭제(물리+비활성화 병행) / 프로젝트별 할당·해제 UI.
+    역할 변경(admin 승격)은 범위 밖 — 생성 role은 서버가 USER 강제
+  - 백엔드: /api/users/ 4개 엔드포인트(GET 목록·POST 생성·DELETE·PATCH is_active), 전부
+    IsAuthenticated+IsAdminRole. accounts 앱 소속 유지, URL만 별도 모듈(user_urls.py).
+    config/urls.py 1줄 외 기존 코드 무수정 — members API·UserSerializer·client.js 그대로
+  - 핵심 방어: role·is_active는 시리얼라이저 필드 부재로 mass assignment 차단 /
+    validate_password 명시 호출(DRF는 자동 적용 안 함) / email__iexact + IntegrityError
+    savepoint 2단(CI 유일 제약) / 자기 자신·마지막 활성 admin은 select_for_update로
+    대상+활성 admin 전원 잠가 상호 동시 제거 경합까지 차단 / 이력(PROTECT 3종) 계정
+    삭제는 409로 변환해 비활성화 안내, 멤버십(CASCADE)만은 실삭제 허용을 테스트로 고정
+  - 프론트: RequireAdmin 가드(편의, 차단은 서버) + 네비 "사용자 관리" + UsersPage(생성
+    폼·목록·비활성 토글·삭제 확인) + ProjectDetailPage 멤버 섹션(셀렉트 할당·해제) +
+    .btn-danger. 409는 "비활성화하세요" 문구로 분기
+  - 검증: 테스트 209개 전부 통과(신규 29, 회귀 0) / npm run build 54 모듈 / 실서버 API
+    E2E 20개 체크 전부 통과 — role=ADMIN 실어도 USER 생성, 할당→200·해제→즉시 404,
+    비활성화 즉시 기존 access 401·로그인 401, 자기 자신 400, 잔여 데이터 0(시연용
+    프로젝트 #17·#18 불변). 브라우저 클릭 스루는 시연 리허설에서
+  - 자체 보안 검토(secure-review) 2회(백엔드/프론트) — 백엔드 낮음 1건 수정(password
+    max_length=128), 프론트 통과(참고 2건은 decisions.md에 기록)
+  - 사고 예방 개선: DB를 바꾸는 검증 스크립트는 실행 전 시나리오·생성 계정·정리 방식을
+    요약 제시하고 승인 후 실행 (사용자 요청, 이후 관례로)
+  - 다음: 브라우저에서 사용자 관리 화면 확인(시연 리허설에 포함), main 병합은 PR로

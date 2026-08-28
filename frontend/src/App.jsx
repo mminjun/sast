@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 
+import RequireAdmin from './auth/RequireAdmin.jsx';
 import RequireAuth from './auth/RequireAuth.jsx';
 import Layout from './components/Layout.jsx';
 import CatalogPage from './pages/CatalogPage.jsx';
@@ -7,6 +8,7 @@ import LoginPage from './pages/LoginPage.jsx';
 import ProjectDetailPage from './pages/ProjectDetailPage.jsx';
 import ProjectListPage from './pages/ProjectListPage.jsx';
 import RunDetailPage from './pages/RunDetailPage.jsx';
+import UsersPage from './pages/UsersPage.jsx';
 
 export default function App() {
   return (
@@ -24,6 +26,14 @@ export default function App() {
         <Route path="/projects/:id" element={<ProjectDetailPage />} />
         <Route path="/runs/:id" element={<RunDetailPage />} />
         <Route path="/catalog" element={<CatalogPage />} />
+        <Route
+          path="/users"
+          element={
+            <RequireAdmin>
+              <UsersPage />
+            </RequireAdmin>
+          }
+        />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Route>
     </Routes>

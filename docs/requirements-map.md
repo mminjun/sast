@@ -9,7 +9,7 @@
 | SFR-002 | 인증 수단 발급 | ✅ | accounts (simplejwt) | JWT access/refresh, logout 시 blacklist |
 | SFR-003 | 역할 기반 접근 제어 | ✅ | accounts/permissions.py `IsAdminRole` | 관리자/일반 2역할, DB 값으로 재검증 |
 | SFR-004 | 분석 프로젝트 관리 | ✅ | projects/views.py `ProjectViewSet` + frontend `ProjectListPage`/`ProjectDetailPage` | 등록·조회·수정, 삭제 라우트 미생성(mixin 조합). 목록·생성·상세 UI 완결(8/28) |
-| SFR-005 | 프로젝트 사용자 할당 | ✅ | projects/views.py `members`/`member_detail` | 개별 추가·해제, assigned_by·assigned_at 기록. 할당 **UI는 비목표**(사용자 목록 API 부재) — API·shell로 수행 |
+| SFR-005 | 프로젝트 사용자 할당 | ✅ | projects/views.py `members`/`member_detail` + frontend `ProjectDetailPage` 멤버 섹션 | 개별 추가·해제, assigned_by·assigned_at 기록. 사용자 목록 API 신설(8/28 저녁)로 할당·해제 UI 완결 — 셀렉트로 할당, 해제 즉시 404. members API는 무수정 재활용 |
 | SFR-006 | 프로젝트 조회 범위 | ✅ | projects/views.py `get_queryset` | 관리자=전체, 일반=할당분만. 브라우저 E2E — 일반 계정 목록에 할당분만 표시(8/28) |
 | SFR-007 | 분석 대상 소스 관리 | ✅ | analysis/views.py `ProjectAnalysisRunsView` + frontend `ProjectDetailPage` | zip 업로드, Zip Slip 방어(SEC-008), 관리자만. 업로드 UI 완결(8/28) |
 | SFR-008 | 정적 분석 실행 | ✅ | analysis/views.py `AnalysisRunExecuteView` + frontend 실행 버튼(`ProjectDetailPage`/`RunDetailPage`) | 업로드와 분리된 2단계 트리거, 관리자만. 동기 실행 중 버튼 잠금 UI(8/28) |
@@ -42,7 +42,7 @@
 |---|---|---|---|---|
 | SEC-001 | 비밀번호 보호 | ✅ | settings.PASSWORD_HASHERS | BCryptSHA256 1순위, 저장 해시 `bcrypt_sha256$` 확인 |
 | SEC-002 | 보호 기능 인증 | ✅ | settings.REST_FRAMEWORK + frontend `RequireAuth` | DRF 기본 권한 IsAuthenticated (기본 차단). catalog 엔드포인트 6종 미인증 401 확인. 프론트는 미인증 시 /login 리다이렉트 — 차단 자체는 서버 담당(8/28) |
-| SEC-003 | 관리자 기능 통제 | ✅ | projects/analysis/catalog 각 뷰 | IsAdminRole 적용 — 프로젝트 생성·수정·할당, 업로드·실행, 재표준화. 3개 앱 전부 적용. E2E — 일반 계정 생성 시도 403(8/28) |
+| SEC-003 | 관리자 기능 통제 | ✅ | projects/analysis/catalog 각 뷰 + accounts `UserListCreateView`/`UserDetailView` | IsAdminRole 적용 — 프로젝트 생성·수정·할당, 업로드·실행, 재표준화, **사용자 관리(목록·생성·삭제·비활성화, 8/28 저녁)**. 생성 role은 서버가 USER 강제(mass assignment 차단), 자기 자신·마지막 활성 admin 방지, 이력 계정 409. E2E — 일반 계정 생성 시도 403(8/28) |
 | SEC-004 | 일반 사용자 권한 통제 | ✅ | 각 앱 `get_permissions`/`permission_classes` | 읽기만 허용, 나머지는 기본 차단. 시리얼라이저 전 필드 read_only. E2E — 일반 계정에 생성·업로드·실행 버튼 미노출(UI 숨김은 편의, 차단은 서버)(8/28) |
 | SEC-005 | 프로젝트 소속 검증 | ✅ | projects·analysis·catalog의 스코프 쿼리셋 | IDOR 방어 — 결과 조회도 스코프된 run을 거쳐야 도달. 할당 해제 즉시 404 (테스트로 고정). 브라우저 E2E — 미할당 프로젝트가 일반 계정에 안 보임(8/28) |
 | SEC-006 | 비인가 정보 노출 방지 | ✅ | 전 앱 (기본 수준, plan.md §5) | 미할당·미존재 동일 404(본문까지 동일), 쓰기 균일 403, **스코프 검사가 필터 검증보다 먼저**라 400/404 차이로 존재를 떠볼 수 없음. 응답·저장값에 서버 절대경로·workspace UUID 없음. 프론트도 404 사유를 구분 없이 "찾을 수 없습니다"로만 표시(8/28) |
@@ -55,7 +55,7 @@
 | 번호 | 이름 | 상태 | 비고 |
 |---|---|---|---|
 | TST-001 | 인증 기능 시험 | ✅ | accounts/tests.py — 로그인 성공/실패, 미인증 401, bcrypt 저장. + 브라우저 E2E — 로그인·세션 복원·로그아웃(폐기 refresh 재사용 401 확인)(8/28) |
-| TST-002 | 역할 권한 시험 | ✅ | accounts/tests.py — 일반 사용자 403, 역할 강등 즉시 반영. 시연 필수. + 브라우저 E2E — 일반 계정에 관리 버튼 미노출, 프로젝트 생성 시도 403(8/28) |
+| TST-002 | 역할 권한 시험 | ✅ | accounts/tests.py — 일반 사용자 403, 역할 강등 즉시 반영. 시연 필수. + 브라우저 E2E — 일반 계정에 관리 버튼 미노출, 프로젝트 생성 시도 403(8/28). + 사용자 관리 API 권한 29개 케이스(미인증 401, 일반 균일 403, 강등 즉시 403, role 강제, 자기 자신·마지막 admin·409, 비활성화 즉시 효력)(8/28 저녁) |
 | TST-003 | 프로젝트 접근 시험 | ✅ | projects/tests.py `IdorDefenseTests` 등 22개. curl 수동 시연: 할당 200 / 미할당·미존재 동일 404 / 쓰기 균일 403. + 브라우저 E2E — 미할당 프로젝트 목록 숨김 + 상세 URL 직접 접근 404(IDOR 차단)(8/28) |
 | TST-004 | 분석 처리 시험 | ✅ | analysis/tests.py 30개 + 실서버 수동 시연 — 업로드→압축해제→Semgrep 실행→결과조회 관통 |
 | TST-005 | 진단 항목 시험 | ✅ | catalog/tests.py `DetectionSampleTests` — 실제 Semgrep으로 `catalog/samples/vulnerable.py` 정탐 20건/13룰, `safe.py` **오탐 0건**. 시연 핵심 |
@@ -81,7 +81,10 @@
 - SEC 10개: 완료 10 (SEC-006·009는 plan.md §5의 "기본 수준" 기준)
 - TST 8개: 완료 7 / 진행중 1(TST-008)
 - QLT 5개: 완료 5
-- 테스트: **180개 전부 통과** (accounts·projects·analysis 84 + catalog 96)
+- 테스트: **209개 전부 통과** (accounts 51 + projects·analysis 62 + catalog 96 — 8/28 저녁
+  사용자 관리 29개 추가, 회귀 0건)
 - **프론트엔드(8/28)**: React SPA로 로그인→프로젝트→업로드→실행→결과(심각도 필터)→카탈로그 49개
-  전 화면 완결. 관리자·일반 계정 브라우저 E2E로 권한 격리까지 실증(위 SFR/SEC/TST 각 행의 8/28 표기).
-  멤버 할당 UI는 비목표(사용자 목록 API 부재, SFR-005 비고)
+  전 화면 완결. 관리자·일반 계정 브라우저 E2E로 권한 격리까지 실증(위 SFR/SEC/TST 각 행의 8/28 표기)
+- **사용자 관리(8/28 저녁)**: /api/users/ 4개 엔드포인트(목록·생성·삭제·비활성화, 전부 관리자
+  전용) + `/users` 페이지 + ProjectDetailPage 멤버 할당·해제 섹션. 실서버 API E2E 20개 체크
+  전부 통과(잔여 데이터 0). 멤버 할당 UI 비목표는 해소(SFR-005 비고)

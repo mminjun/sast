@@ -17,6 +17,14 @@ export default function ProjectDetailPage() {
   const [executingId, setExecutingId] = useState(null);
   const [executeError, setExecuteError] = useState('');
   const fileInputRef = useRef(null);
+  // 멤버 할당·해제는 관리자 전용 — 서버의 members API도 IsAdminRole로 닫혀 있어
+  // 일반 사용자는 조회 요청 자체를 보내지 않는다 (SFR-005, SEC-003).
+  const [members, setMembers] = useState(null);
+  const [allUsers, setAllUsers] = useState(null);
+  const [memberError, setMemberError] = useState('');
+  const [addUserId, setAddUserId] = useState('');
+  const [addingMember, setAddingMember] = useState(false);
+  const [removingId, setRemovingId] = useState(null);
 
   useEffect(() => {
     setError('');
@@ -34,6 +42,51 @@ export default function ProjectDetailPage() {
         );
       });
   }, [id]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    setMemberError('');
+    Promise.all([api(`/api/projects/${id}/members/`), api('/api/users/')])
+      .then(([m, u]) => {
+        setMembers(m);
+        setAllUsers(u);
+      })
+      .catch((err) =>
+        setMemberError(err instanceof ApiError ? err.detail : '멤버 목록을 불러오지 못했습니다.')
+      );
+  }, [id, isAdmin]);
+
+  const handleAddMember = async (event) => {
+    event.preventDefault();
+    if (!addUserId) return;
+    setMemberError('');
+    setAddingMember(true);
+    try {
+      const membership = await api(`/api/projects/${id}/members/`, {
+        method: 'POST',
+        body: { user_id: Number(addUserId) },
+      });
+      setMembers((prev) => [membership, ...(prev || [])]);
+      setAddUserId('');
+    } catch (err) {
+      setMemberError(err instanceof ApiError ? err.detail : '할당에 실패했습니다.');
+    } finally {
+      setAddingMember(false);
+    }
+  };
+
+  const handleRemoveMember = async (userId) => {
+    setMemberError('');
+    setRemovingId(userId);
+    try {
+      await api(`/api/projects/${id}/members/${userId}/`, { method: 'DELETE' });
+      setMembers((prev) => prev.filter((m) => m.user.id !== userId));
+    } catch (err) {
+      setMemberError(err instanceof ApiError ? err.detail : '해제에 실패했습니다.');
+    } finally {
+      setRemovingId(null);
+    }
+  };
 
   const handleUpload = async (event) => {
     event.preventDefault();
@@ -134,6 +187,68 @@ export default function ProjectDetailPage() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {isAdmin && (
+        <>
+          <h2>멤버</h2>
+          <form className="card form-inline" onSubmit={handleAddMember}>
+            <select
+              value={addUserId}
+              onChange={(e) => setAddUserId(e.target.value)}
+              required
+            >
+              <option value="">할당할 사용자 선택</option>
+              {allUsers
+                ?.filter(
+                  (u) => u.is_active && !members?.some((m) => m.user.id === u.id)
+                )
+                .map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.email}
+                  </option>
+                ))}
+            </select>
+            <button type="submit" className="btn btn-primary" disabled={addingMember || !addUserId}>
+              {addingMember ? '할당 중…' : '할당'}
+            </button>
+            <span className="muted">할당된 사용자만 이 프로젝트를 조회할 수 있습니다.</span>
+            {memberError && <p className="form-error">{memberError}</p>}
+          </form>
+
+          {members?.length === 0 && <p className="muted">할당된 사용자가 없습니다.</p>}
+          {members?.length > 0 && (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>이메일</th>
+                  <th>할당자</th>
+                  <th>할당일</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map((m) => (
+                  <tr key={m.id}>
+                    <td>{m.user.email}</td>
+                    <td className="muted">{m.assigned_by?.email || '—'}</td>
+                    <td>{new Date(m.assigned_at).toLocaleString('ko-KR')}</td>
+                    <td className="row-actions">
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        disabled={removingId !== null}
+                        onClick={() => handleRemoveMember(m.user.id)}
+                      >
+                        {removingId === m.user.id ? '해제 중…' : '해제'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
       )}
     </>
   );
