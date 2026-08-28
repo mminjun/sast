@@ -167,3 +167,22 @@
   - 한계 명시(보고서 §7): 49개 중 13개만 실탐지 / Python만 / IDOR·권한 로직은 패턴 룰로 검증
     불가(테스트 180개 담당) — **SAST 0건과 "보안 검증됨"은 다른 말**
   - 다음: 발표 자료에 §4 집계·§5 트리아지·§6 후속 과제 반영 → React 화면 (pen.dev 목업)
+- React 프론트엔드 구축 (SFR-001~002·004·007~008·013·015~017의 화면, SEC-002~006 UI 반영)
+  - dashboard.pen 목업은 Pencil 에디터 미연결로 읽기 불가 → 사용자 결정으로 목업 없이
+    표준 구성. 언어는 JavaScript(시연 일정 우선, 사용자 결정)
+  - `frontend/` Vite+React SPA. 신규 npm 의존성 5종(react/react-dom/react-router-dom/
+    vite/@vitejs/plugin-react, 전부 MIT, 계획 승인으로 갈음). Python 의존성·백엔드 수정 0
+  - 화면 5개: 로그인 / 프로젝트 목록·생성 / 프로젝트 상세(zip 업로드·실행) /
+    실행 결과(심각도 집계·필터·페이지네이션 50) / 카탈로그 49개(유형·심각도·구현여부·검색)
+  - JWT: access는 메모리, refresh는 sessionStorage. refresh는 **single-flight**(사용자
+    지적 — rotation+blacklist라 중복 갱신이 정상 세션을 로그아웃시킴. StrictMode 이중
+    마운트가 실제로 이 경합을 만든다). CORS는 Vite dev proxy로 회피(백엔드 무수정).
+    근거는 decisions.md
+  - 검증(결과 건수 기준 — 8/27 교훈): 프록시 경유 실 API로 로그인→me(ADMIN)→프로젝트
+    1건→카탈로그 49/13→보존된 도그푸딩 실행 #18 결과 33건·HIGH 필터 33건·summary 33건
+    일치 / 로그아웃 후 폐기 refresh 재사용 401 확인 / `npm run build` 통과(52 모듈)
+  - 자체 보안 검토(secure-review) 후 낮음 2건 수정 — 커밋 전 반영
+    - refresh 실패 시 세션 정리를 401/403에만 한정(일시 장애에 유효 토큰을 버리지 않게)
+    - 로그아웃은 noAuthRetry(만료 access로 갱신을 거치면 blacklist가 헛돌고 새 refresh만 남음)
+  - 다음: 브라우저 실제 화면 확인(관리자·일반 E2E) → 시연 리허설. 멤버 할당 UI는
+    사용자 목록 API가 없어 범위 밖으로 기록

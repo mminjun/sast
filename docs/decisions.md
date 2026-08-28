@@ -351,3 +351,34 @@ Semgrep 문서만 읽어서는 예측할 수 없고, 실제로 돌려 JSON을 �
   400/404 차이로 실행의 존재를 떠보지 못하게 한다 | SFR-017, SEC-006
 - 카탈로그 조회는 프로젝트 권한과 무관하게 인증만 요구 | 49개 진단 기준은 특정 프로젝트에
   딸린 데이터가 아니라 공통 기준 문서다. 할당이 해제돼도 카탈로그는 계속 보인다 | SFR-013
+
+### React 프론트엔드 — 2026-08-28 (frontend)
+
+- **JWT 저장: access는 JS 메모리, refresh는 sessionStorage** | httpOnly 쿠키가 XSS엔
+  이론상 최강이지만 simplejwt가 토큰을 응답 본문으로 주는 현 구조에서 쿠키는 백엔드
+  수정(쿠키 발급+CSRF 방어)이 필요하다 — 완성·검증된 백엔드를 시연 직전에 건드리지
+  않는다. localStorage는 브라우저 재시작 후에도 남아 탈취 창이 가장 넓어 배제.
+  sessionStorage는 F5 생존·탭 닫으면 소멸. XSS가 refresh를 읽을 수 있다는 잔여 위험은
+  수용하되, 서버의 rotation+blacklist가 탈취 토큰 수명을 줄인다 | SEC-002, SFR-002
+- **refresh는 single-flight** | 동시 401 여러 건이 각자 refresh를 부르면
+  rotation+blacklist 때문에 두 번째 호출이 폐기된 토큰을 써서 멀쩡한 세션이 로그아웃된다.
+  진행 중인 갱신 Promise를 전 요청이 공유하고 완료 후 재시도한다. React StrictMode의
+  이중 마운트가 정확히 이 경합을 만들어 실제로 필요했다 (사용자 지적 사항) | SFR-002
+- **CORS는 Vite dev proxy로 회피** | dev 서버가 `/api`를 127.0.0.1:8000으로 프록시하면
+  브라우저 입장에선 same-origin이라 CORS 자체가 발생하지 않는다 — django-cors-headers
+  의존성도 백엔드 settings 수정도 불필요. 운영 배포 시엔 빌드 산출물을 Django가
+  서빙하거나 그때 CORS를 추가한다(현 범위 밖) | SEC-010
+- **상태관리 라이브러리 없음** | 화면 간 공유 상태는 인증뿐이라 Context 하나로 충분.
+  신규 npm 의존성은 react/react-dom/react-router-dom/vite/@vitejs/plugin-react 5종(MIT)만 | QLT-001
+- **관리자 UI 숨김은 편의일 뿐** | `isAdmin`으로 생성·업로드·실행 버튼을 숨기지만 실제
+  차단은 서버의 IsAdminRole·스코프 쿼리셋이 담당 — 클라이언트를 신뢰하지 않는 원칙
+  그대로다. 미할당·미존재 404 응답도 화면에서 구분하지 않는다 | SEC-003~006
+
+### 자체 보안 검토(secure-review) 후속 수정 — 2026-08-28 (frontend)
+
+- refresh 실패 시 세션 정리는 401/403에만 | 일시 장애(500·429)에도 지우면 서버에선
+  유효한 refresh를 blacklist 없이 로컬에서만 버리게 된다. 토큰이 거부된 경우에만
+  로그아웃 처리하고 그 외엔 일시 오류로 던진다 | SFR-002
+- 로그아웃 호출은 갱신·재시도 없이(noAuthRetry) | access 만료 상태에서 갱신을 거치면
+  본문의 refresh가 rotation으로 폐기된 값이 되어 blacklist가 조용히 실패하고 새 refresh만
+  서버에 남는다. 그 경우 로컬 정리만 하는 편이 토큰을 한 번 더 회전시키는 것보다 낫다 | SFR-002
