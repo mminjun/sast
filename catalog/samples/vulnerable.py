@@ -14,11 +14,13 @@ import pickle
 import random
 import ssl
 import subprocess
+import tempfile
 import urllib.request
 
 import requests
 import yaml
 from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 
 DEBUG = True  # KISA-EH-01
 
@@ -93,6 +95,38 @@ def handler(request):
 def debug_here():
     pdb.set_trace()  # KISA-EN-02
     breakpoint()  # KISA-EN-02
+
+
+def cleanup_quietly(path):
+    try:  # KISA-EH-03 (bare except + pass)
+        os.remove(path)
+    except:
+        pass
+
+
+def parse_amount(value):
+    try:  # KISA-EH-03 (예외 삼킴)
+        return int(value)
+    except Exception:
+        pass
+
+
+def make_temp_file():
+    return tempfile.mktemp()  # KISA-AA-02
+
+
+def open_tls(sock):
+    return ssl.wrap_socket(sock)  # KISA-AA-02
+
+
+@csrf_exempt  # KISA-IV-11
+def legacy_submit(request):
+    return JsonResponse({"ok": True})
+
+
+def append_log(line):
+    log = open("app.log", "a")  # KISA-CE-02
+    log.write(line)
 
 
 def do_work():

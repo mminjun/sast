@@ -1,7 +1,8 @@
 """진단 기준·결과 표준화 시험 (TST-005, TST-006, TST-007, QLT-004).
 
 핵심 네 가지:
-1. 정탐·오탐 — 취약 샘플에서 13개 룰이 걸리고, 안전 샘플에서는 0건이다 (TST-005).
+1. 정탐·오탐 — 취약 샘플에서 구현된 전 룰(IMPLEMENTED_CODES)이 걸리고,
+   안전 샘플에서는 0건이다 (TST-005).
 2. 심각도 정규화 — 카탈로그 등급이 Semgrep 등급을 이긴다. 말이 아니라 두 값이
    실제로 충돌하는 케이스로 증명한다 (QLT-004).
 3. 경로 노출 — 저장값·응답 어디에도 서버 절대경로·workspace UUID가 없다 (SEC-006/007).
@@ -53,17 +54,20 @@ _UNSET = object()
 CATEGORY_COUNTS = {'IV': 17, 'SF': 16, 'TS': 2, 'EH': 3, 'CE': 5, 'EN': 4, 'AA': 2}
 SEVERITY_COUNTS = {'HIGH': 26, 'MEDIUM': 20, 'LOW': 3}
 
-# 실탐지 룰이 붙은 항목 (docs/decisions.md에 선정 근거를 남긴 13개).
+# 실탐지 룰이 붙은 항목 (선정 근거는 docs/decisions.md — 8/27 최초 13개, 8/29 확장).
 IMPLEMENTED_CODES = {
-    'KISA-IV-01', 'KISA-IV-02', 'KISA-IV-03', 'KISA-IV-05', 'KISA-IV-12',
+    'KISA-IV-01', 'KISA-IV-02', 'KISA-IV-03', 'KISA-IV-05', 'KISA-IV-11', 'KISA-IV-12',
     'KISA-SF-04', 'KISA-SF-06', 'KISA-SF-08', 'KISA-SF-11', 'KISA-SF-14',
-    'KISA-CE-05', 'KISA-EH-01', 'KISA-EN-02',
+    'KISA-CE-02', 'KISA-CE-05', 'KISA-EH-01', 'KISA-EH-03', 'KISA-EN-02',
+    'KISA-AA-02',
 }
-# 취약 샘플에서 나와야 하는 룰별 건수. 총 20건.
+# 취약 샘플에서 나와야 하는 룰별 건수. 총 26건.
 EXPECTED_SAMPLE_FINDINGS = {
-    'KISA-IV-01': 1, 'KISA-IV-02': 1, 'KISA-IV-03': 1, 'KISA-IV-05': 2, 'KISA-IV-12': 2,
+    'KISA-IV-01': 1, 'KISA-IV-02': 1, 'KISA-IV-03': 1, 'KISA-IV-05': 2, 'KISA-IV-11': 1,
+    'KISA-IV-12': 2,
     'KISA-SF-04': 1, 'KISA-SF-06': 2, 'KISA-SF-08': 1, 'KISA-SF-11': 2, 'KISA-SF-14': 1,
-    'KISA-CE-05': 2, 'KISA-EH-01': 2, 'KISA-EN-02': 2,
+    'KISA-CE-02': 1, 'KISA-CE-05': 2, 'KISA-EH-01': 2, 'KISA-EH-03': 2, 'KISA-EN-02': 2,
+    'KISA-AA-02': 2,
 }
 
 SEMGREP_AVAILABLE = shutil.which('semgrep') is not None
@@ -628,8 +632,8 @@ class CatalogReadTests(CatalogApiTestCase):
         self.login(self.member)
         implemented = self.client.get(rule_list_url(), {'implemented': 'true'})
         pending = self.client.get(rule_list_url(), {'implemented': 'false'})
-        self.assertEqual(len(implemented.data), 13)
-        self.assertEqual(len(pending.data), 36)
+        self.assertEqual(len(implemented.data), len(IMPLEMENTED_CODES))
+        self.assertEqual(len(pending.data), 49 - len(IMPLEMENTED_CODES))
 
     def test_keyword_search(self):
         self.login(self.member)
@@ -653,8 +657,8 @@ class CatalogReadTests(CatalogApiTestCase):
         self.login(self.member)
         data = self.client.get(catalog_summary_url()).data
         self.assertEqual(data['total'], 49)
-        self.assertEqual(data['implemented'], 13)
-        self.assertEqual(data['not_implemented'], 36)
+        self.assertEqual(data['implemented'], len(IMPLEMENTED_CODES))
+        self.assertEqual(data['not_implemented'], 49 - len(IMPLEMENTED_CODES))
         self.assertEqual(len(data['by_category']), 7)
         self.assertEqual(len(data['by_severity']), 3)
 

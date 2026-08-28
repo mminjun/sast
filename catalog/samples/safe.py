@@ -5,11 +5,14 @@
 """
 
 import hashlib
+import logging
 import os
 import pickle
 import random
 import secrets
+import ssl
 import subprocess
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -17,6 +20,8 @@ import bcrypt
 import requests
 import yaml
 from django.http import JsonResponse
+
+logger = logging.getLogger(__name__)
 
 DEBUG = os.getenv("DJANGO_DEBUG", "").lower() == "true"
 
@@ -108,6 +113,45 @@ def handler(request):
     except Exception:
         # 사용자에겐 일반화된 메시지, 상세는 서버 로그로
         return JsonResponse({"error": "처리 중 오류가 발생했습니다."}, status=500)
+
+
+def cleanup_quietly(path):
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        # 구체적인 예외만 잡고, 무시하는 이유를 로그로 남긴다
+        logger.info("이미 삭제된 경로: %s", path)
+
+
+def parse_amount(value):
+    try:
+        return int(value)
+    except ValueError:
+        # 삼키지 않고 기록 후 다시 던진다
+        logger.error("금액 파싱 실패: %r", value)
+        raise
+
+
+def make_temp_file():
+    # mktemp(경쟁 조건) 대신 생성과 열기가 원자적인 API
+    return tempfile.NamedTemporaryFile(delete=False)
+
+
+def open_tls(sock):
+    # 폐기된 ssl.wrap_socket 대신 검증이 켜진 기본 컨텍스트
+    context = ssl.create_default_context()
+    return context.wrap_socket(sock, server_hostname="api.example.com")
+
+
+def submit_view(request):
+    # csrf_exempt 없이 CSRF 미들웨어 보호를 그대로 유지한다
+    return JsonResponse({"ok": True})
+
+
+def append_log(line):
+    # with 문으로 열어 블록을 벗어나면 반드시 닫힌다
+    with open("app.log", "a", encoding="utf-8") as log:
+        log.write(line)
 
 
 def do_work():

@@ -22,3 +22,27 @@ rules:
       # 패턴 안에 콜론이 있어 YAML 매핑으로 해석되지 않도록 인용한다.
       - pattern: 'return $RESP({..., $KEY: str($ERR)}, ...)'
       - pattern: return $RESP(..., traceback.format_exc(...), ...)
+
+  - id: kisa-eh-03-improper-exception-handling
+    languages: [python]
+    severity: INFO
+    message: >-
+      부적절한 예외 처리 (KISA-EH-03). 예외를 잡고 아무것도 하지 않으면 오류가 숨겨져
+      문제를 늦게 발견합니다. 구체적인 예외 타입을 잡아 로그를 남기거나 다시 던지세요.
+    metadata:
+      kisa_code: KISA-EH-03
+      kisa_name: 부적절한 예외 처리
+      cwe: CWE-390
+    pattern-either:
+      # 예외 내용을 반환해 노출하는 것은 KISA-EH-01이 담당한다. 여기서는 반대 방향 —
+      # 예외를 통째로 삼켜(body가 pass뿐) 오류가 드러나지 않는 경우만 잡는다.
+      - pattern: |
+          try:
+            ...
+          except:
+            pass
+      - pattern: |
+          try:
+            ...
+          except $EXC:
+            pass

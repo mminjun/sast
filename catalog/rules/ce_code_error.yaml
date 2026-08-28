@@ -27,3 +27,25 @@ rules:
       # 안전한 로더를 명시한 호출은 제외한다 (오탐 억제).
       - pattern-not: yaml.load(..., Loader=yaml.SafeLoader)
       - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader)
+
+  - id: kisa-ce-02-resource-leak
+    languages: [python]
+    severity: WARNING
+    message: >-
+      부적절한 자원 해제 (KISA-CE-02). 열어 둔 파일 핸들을 닫지 않으면 자원이 누적되어
+      고갈됩니다. with 문(컨텍스트 매니저)으로 열거나 finally에서 close 하세요.
+    metadata:
+      kisa_code: KISA-CE-02
+      kisa_name: 부적절한 자원 해제
+      cwe: CWE-772
+    patterns:
+      # 대입문 형태만 잡는다 — open(...).read() 같은 즉시 소비형은 IV-03 등 다른
+      # 룰의 영역과 겹칠 수 있고, 핸들을 변수로 들고 있는 경우가 누수의 전형이다.
+      - pattern: $FD = open(...)
+      # 같은 블록에서 뒤이어 close 하면 해제된 것으로 본다 (오탐 억제).
+      # 한계: try/finally 안의 close는 문장 나열 패턴이 닿지 않아 잡힐 수 있다 —
+      # 권장 대응(with 문)으로 쓰면 애초에 대입문 형태가 아니라 걸리지 않는다.
+      - pattern-not-inside: |
+          $FD = open(...)
+          ...
+          $FD.close()

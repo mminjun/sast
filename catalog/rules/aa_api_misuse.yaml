@@ -1,0 +1,24 @@
+# KISA 제7절 API 오용 (AA) — Python 실탐지 룰
+# 매핑·심각도 원칙은 iv_input_validation.yaml 머리말 참조.
+
+rules:
+  - id: kisa-aa-02-vulnerable-api
+    languages: [python]
+    severity: WARNING
+    message: >-
+      취약한 API 사용 (KISA-AA-02). 안전하지 않다고 알려져 사용이 권고되지 않는
+      API입니다. tempfile.mktemp는 NamedTemporaryFile로, ssl.wrap_socket은
+      SSLContext.wrap_socket으로 교체하세요.
+    metadata:
+      kisa_code: KISA-AA-02
+      kisa_name: 취약한 API 사용
+      cwe: CWE-477
+    # 경계: 다른 KISA 항목으로 분류되는 위험 API(eval=IV-02, os.system=IV-05,
+    # pickle=CE-05, md5=SF-04, random=SF-08 등)는 여기서 다시 잡지 않는다 —
+    # 같은 코드를 두 항목이 중복 보고하면 결과 일관성(QLT-004)이 깨진다.
+    # AA-02는 다른 항목에 속하지 않는 폐기·위험 API만 담당한다.
+    pattern-either:
+      # 경쟁 조건(TOCTOU)으로 파이썬 공식 문서가 사용을 금지하는 API
+      - pattern: tempfile.mktemp(...)
+      # 검증 없는 기본값 문제로 폐기된 API (Python 3.12에서 제거)
+      - pattern: ssl.wrap_socket(...)
