@@ -235,6 +235,12 @@ CATALOG_SEED_FILE = BASE_DIR / 'catalog' / 'data' / 'kisa_rules.json'
 ANALYSIS_SEMGREP_CONFIG = str(CATALOG_RULES_DIR)
 ANALYSIS_SEMGREP_TIMEOUT = 120  # 초 — 타임아웃 시 FAILED로 기록
 
+# 분석 대상 언어 파일 확장자. 현재 카탈로그 룰 21개가 전부 languages: [python]이라
+# .py 하나다 — 다른 언어 룰을 추가하면 여기도 함께 갱신한다 (SFR-012, TST-008).
+# 룰 YAML에서 동적으로 파생하지 않는 이유: analysis 앱이 catalog의 룰 파일을 읽으면
+# 역방향 의존이 생긴다 (QLT-001).
+ANALYSIS_SCAN_TARGET_SUFFIXES = ('.py',)
+
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration

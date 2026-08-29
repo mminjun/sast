@@ -248,3 +248,18 @@
     포함, 스킵 없음), seed_catalog 재실행 신규 0/갱신 49 — 실탐지 21/미구현 28
   - 커밋 7f3e0e8(1차)·bc5f0ee(2차) + 문서 갱신 커밋
   - 다음: PR로 main 병합, 시연 리허설(9/3 최종 발표), 발표 자료에 등급 정책 화면 반영
+- 낮 — 분석 대상 0개 실패 처리 (fix/empty-source-validation, TST-008, SFR-015)
+  - 배경: 빈 zip(엔트리 0)·지원 언어 파일 없는 zip을 실행하면 Semgrep이 빈 디렉토리에
+    exit 0을 반환해 SUCCEEDED·0건으로 끝났다. 대상 없는 입력은 유효하지 않은 분석으로
+    보고 실패 처리하기로 결정 (TST-008 취지)
+  - `run_semgrep()` 서두에서 격리 디렉토리의 지원 확장자 파일
+    (`ANALYSIS_SCAN_TARGET_SUFFIXES`, 현재 `.py` — 룰 21개 전부 python) 존재를 확인,
+    0개면 Semgrep 미호출로 FAILED + "분석 가능한 소스 파일이 없습니다" 저장.
+    기존 타임아웃·비정상 종료 분기와 같은 저장 패턴, 상태 기계·업로드 단계 무수정
+    (업로드=소스 등록, 실행=분석 — 2단계 API 의미 유지). 확장자를 룰 YAML에서 동적
+    파생하지 않은 이유: analysis→catalog 역방향 의존 회피(QLT-001), settings 주석에 기록
+  - 프론트 무수정 — RunDetailPage가 이미 실패 배지+`error_message`를 표시
+  - 검증: 신규 테스트 2개(빈 zip·비지원 파일만 zip → FAILED + `assert_not_called`)
+    포함 전체 211개 통과, 회귀 0건 / manage.py check 0건 / 브라우저 확인은 사용자
+    TST-008 시연에서 (dogfood/empty.zip·broken-not-a-zip.zip 준비됨)
+  - 다음: 브라우저 TST-008 확인 → PR로 main 병합

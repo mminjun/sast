@@ -181,7 +181,9 @@ export default function ProjectDetailPage() {
                       {executingId === run.id ? '분석 중… (최대 2분)' : '실행'}
                     </button>
                   )}
-                  {run.status === 'SUCCEEDED' && <Link to={`/runs/${run.id}`}>결과 보기</Link>}
+                  {(run.status === 'SUCCEEDED' || run.status === 'FAILED') && (
+                    <Link to={`/runs/${run.id}`}>결과 보기</Link>
+                  )}
                 </td>
               </tr>
             ))}
