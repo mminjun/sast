@@ -155,6 +155,22 @@ def run_semgrep(run):
     """
     target = source_dir(run)
 
+    # 분석 대상 파일이 하나도 없으면 Semgrep을 돌리지 않는다. 빈 zip·지원 언어 파일이
+    # 없는 zip도 Semgrep은 exit 0을 반환해 SUCCEEDED·0건으로 보이는데, 대상 없는
+    # 입력은 유효하지 않은 분석이므로 실패로 기록한다 (TST-008, SFR-015).
+    suffixes = settings.ANALYSIS_SCAN_TARGET_SUFFIXES
+    if not any(
+        p.is_file() and p.suffix.lower() in suffixes
+        for p in target.rglob('*')
+    ):
+        run.status = AnalysisStatus.FAILED
+        run.error_message = (
+            f'분석 가능한 소스 파일이 없습니다 (지원 확장자: {", ".join(suffixes)}).'
+        )
+        run.finished_at = timezone.now()
+        run.save(update_fields=['status', 'error_message', 'finished_at'])
+        return
+
     try:
         completed = subprocess.run(
             [

@@ -385,11 +385,13 @@ class RoleControlTests(AnalysisTestCase):
 class ExecuteStatusTests(AnalysisTestCase):
     """SFR-008~009, SFR-015 — 상태 전이. Semgrep 호출은 모킹한다."""
 
-    def _upload(self):
+    def _upload(self, entries=None):
+        if entries is None:
+            entries = {'app.py': 'eval(input())\n'}
         self.login(self.admin)
         response = self.client.post(
             list_url(self.project_a.pk),
-            {'file': upload_file(entries={'app.py': 'eval(input())\n'})},
+            {'file': upload_file(entries=entries)},
             format='multipart',
         )
         return response.data['id']
@@ -449,6 +451,35 @@ class ExecuteStatusTests(AnalysisTestCase):
         second = self.client.post(execute_url(run_id))
         self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
         self.assertEqual(mock_run.call_count, 1)
+
+    @patch('analysis.services.subprocess.run')
+    def test_empty_zip_marks_failed_without_running_semgrep(self, mock_run):
+        # 빈 zip은 업로드 자체는 성공하지만, 실행 시점에 분석 대상이 없어
+        # Semgrep 호출 없이 FAILED가 되어야 한다 (TST-008).
+        run_id = self._upload(entries={})
+
+        response = self.client.post(execute_url(run_id))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], AnalysisStatus.FAILED)
+        run = AnalysisRun.objects.get(pk=run_id)
+        self.assertIn('분석 가능한 소스 파일이 없습니다', run.error_message)
+        self.assertIsNotNone(run.finished_at)
+        mock_run.assert_not_called()
+
+    @patch('analysis.services.subprocess.run')
+    def test_zip_without_supported_files_marks_failed_without_running_semgrep(self, mock_run):
+        run_id = self._upload(entries={'readme.md': '# docs only\n'})
+
+        response = self.client.post(execute_url(run_id))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], AnalysisStatus.FAILED)
+        self.assertIn(
+            '분석 가능한 소스 파일이 없습니다',
+            AnalysisRun.objects.get(pk=run_id).error_message,
+        )
+        mock_run.assert_not_called()
 
     @patch('analysis.services.subprocess.run')
     def test_failed_run_can_be_retried(self, mock_run):
