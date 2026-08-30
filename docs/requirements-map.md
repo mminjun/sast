@@ -61,7 +61,7 @@
 | TST-005 | 진단 항목 시험 | ✅ | catalog/tests.py `DetectionSampleTests` — 실제 Semgrep으로 `catalog/samples/vulnerable.py` 정탐 31건/21룰(8/29 확장), `safe.py` **오탐 0건**. 시연 핵심 |
 | TST-006 | 카탈로그 시험 | ✅ | catalog/tests.py `SeedCatalogTests`·`SeedValidationTests`·`CatalogReadTests` — 49개 등록·유형 분포·멱등·드리프트 감지·조회 필터 |
 | TST-007 | 분석 결과 관리 시험 | ✅ | catalog/tests.py `IngestTests`·`FindingReadTests`·`ReingestTests`·`PaginationTests` — 변환·멱등·필터·집계·재표준화 |
-| TST-008 | 오류 처리 시험 | 🔨 | 기본 수준 — 잘못된 필터 400, 원본 없는 재표준화 409, 미존재 404, 표준화 실패 시 실행 보존+로그. 8/29: zip 아닌 파일 업로드 400 거부·분석 대상 0개(빈 zip 포함) 실행 시 Semgrep 미호출 FAILED+사유 저장(analysis/tests.py 2건). 통일 에러 응답 포맷은 미정 |
+| TST-008 | 오류 처리 시험 | ✅ | 기본 수준 — 잘못된 필터 400, 원본 없는 재표준화 409, 미존재 404, 표준화 실패 시 실행 보존+로그. 8/29: zip 아닌 파일 업로드 400 거부·분석 대상 0개(빈 zip 포함) 실행 시 Semgrep 미호출 FAILED+사유 저장(analysis/tests.py 2건). 검증 대상 3종 테스트 고정 — 상태(깨진 zip 400, 빈 zip FAILED), 오류 정보(error_message 저장), 재확인 절차(FAILED 재실행 `test_failed_run_can_be_retried`). 응답 포맷 통일은 QLT-004 후순위로 분리 |
 
 ## QLT (품질)
 | 번호 | 이름 | 상태 | 비고 |
@@ -79,7 +79,7 @@
 - SFR 17개: 완료 15 / 비목표 1(SFR-011 — Python만, Java/JS는 plan.md §5) / — SFR-010은 구조 충족
 - DAR 10개: 완료 9 / 비목표 1(DAR-008, 스냅샷으로 단순화)
 - SEC 10개: 완료 10 (SEC-006·009는 plan.md §5의 "기본 수준" 기준)
-- TST 8개: 완료 7 / 진행중 1(TST-008)
+- TST 8개: 완료 8
 - QLT 5개: 완료 5
 - 테스트: **211개 전부 통과** (accounts 51 + projects·analysis 64 + catalog 96 — 8/29
   분석 대상 0개 실패 처리 2개 추가, 회귀 0건)
