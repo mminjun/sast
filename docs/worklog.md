@@ -283,3 +283,25 @@
     브랜치는 로컬·원격 모두 삭제, main 단일 상태
   - 다음: 도그푸딩 #20 48건 트리아지(신규 룰이 잡은 15건 확인 — SF-13·CE-02 주목),
     시연 리허설(9/3 최종 발표)
+
+## 2026-09-01
+- 최종발표용 개선 5건 (항목별 diff 승인 방식으로 진행)
+  - ① User.name(선택, 50자) + 마이그레이션 — 생성/수정 API·폼 반영, 목록·생성자·
+    할당자·실행자를 "email (이름)"로 표시(`formatUser` 공용 헬퍼). PATCH는
+    is_active·name만 허용(mass assignment 차단 유지), 이름 수정 UI는 prompt 방식
+  - ② 사용자 목록 API에 할당 프로젝트(id·name, 읽기 전용) 포함 — 목록 전용
+    UserListSerializer 분리(Me·생성/수정 응답 불변), prefetch로 N+1 방지,
+    UsersPage에 쉼표 구분 컬럼(할당/해제 기능 없음)
+  - ③ 활동 이력 있는 계정은 삭제 버튼 비활성 + "비활성화하세요" 툴팁 — 서버가
+    has_history를 내려줌. 기준은 삭제를 막는 PROTECT 참조와 동일(Exists annotate)
+  - ④ ProjectMember.user CASCADE→PROTECT + 마이그레이션 — assigned_by만 PROTECT면
+    할당 기록 반쪽만 보존되는 모순 해소. 할당 이력 있는 유저 삭제 409 거부(해제 후
+    삭제 가능) 테스트로 고정, 기존 CASCADE 기대 테스트 교체. decisions.md 기록
+  - ⑤ 결과 열람 접근 로그(RFP 외 자체 개선) — run 상세·findings 목록·summary에
+    user email·액션·run/project id·시각 INFO 기록(config/access_log.py →
+    logs/access.log, gitignore `/logs/` 확인). 성공 응답만 기록(404·400 제외),
+    로깅 실패는 예외 흡수·delay 오픈으로 요청에 영향 없음. decisions.md 기록
+  - 검증: 전체 테스트 211→221개 통과(신규 10, 교체 1) / access.log 실기록 스모크
+    확인 / 마이그레이션 2건 로컬 DB 적용
+  - 커밋 ac32a05(①~③)·320a53d(④)·4380b08(⑤) — 각 커밋 단독 green 되게 분리 스테이징
+  - 다음: 도그푸딩 #20 48건 트리아지, 시연 리허설(9/3 최종 발표)
