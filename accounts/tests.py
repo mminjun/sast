@@ -363,8 +363,8 @@ class UserListApiTests(APITestCase):
             status.HTTP_204_NO_CONTENT,
         )
 
-    def test_has_history_covers_assigner(self):
-        """할당 감사 기록(assigned_by)도 이력이다."""
+    def test_has_history_covers_assignment_record(self):
+        """할당 기록 양쪽 — 할당자(assigned_by)와 할당된 사용자(user) 모두 이력이다."""
         assigner = User.objects.create_user(
             email='assigner@example.com', password=PASSWORD, role=Role.ADMIN,
         )
@@ -375,6 +375,7 @@ class UserListApiTests(APITestCase):
         res = self.client.get(reverse('users:user-list'))
         flags = {row['email']: row['has_history'] for row in res.data}
         self.assertTrue(flags['assigner@example.com'])
+        self.assertTrue(flags['mem@example.com'])
 
     def test_list_includes_inactive_users(self):
         User.objects.create_user(email='off@example.com', password=PASSWORD, is_active=False)
@@ -497,14 +498,24 @@ class UserDeleteApiTests(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(User.objects.filter(pk=self.target.pk).exists())
 
-    def test_membership_only_user_is_deleted_with_memberships(self):
-        """멤버십(CASCADE)은 이력이 아니다 — 계정과 함께 지워진다."""
+    def test_assigned_user_cannot_be_deleted(self):
+        """할당 이력이 있는 사용자는 삭제가 거부된다 (CASCADE→PROTECT, DAR-010).
+
+        assigned_by만 보존하면 할당 기록의 반쪽만 남아 모순이다 — 할당을
+        해제한 뒤에는 이력이 사라져 삭제할 수 있다.
+        """
         project = Project.objects.create(name='P', created_by=self.admin)
-        ProjectMember.objects.create(project=project, user=self.target, assigned_by=self.admin)
+        membership = ProjectMember.objects.create(
+            project=project, user=self.target, assigned_by=self.admin,
+        )
+        res = self.client.delete(_detail_url(self.target.pk))
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertTrue(User.objects.filter(pk=self.target.pk).exists())
+        self.assertTrue(ProjectMember.objects.filter(pk=membership.pk).exists())
+
+        membership.delete()
         res = self.client.delete(_detail_url(self.target.pk))
         self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(ProjectMember.objects.filter(project=project).exists())
-        self.assertTrue(Project.objects.filter(pk=project.pk).exists())
 
     def test_project_creator_cannot_be_deleted(self):
         Project.objects.create(name='P', created_by=self.target)

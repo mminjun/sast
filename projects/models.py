@@ -61,9 +61,11 @@ class ProjectMember(models.Model):
         related_name='memberships',
         verbose_name='프로젝트',
     )
+    # 할당 기록도 감사 기록이다 — assigned_by만 PROTECT면 사용자 삭제 시 기록의
+    # 반쪽(누가 할당받았나)만 사라져 모순이라 양쪽 다 PROTECT (DAR-010, decisions.md).
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='project_memberships',
         verbose_name='사용자',
     )

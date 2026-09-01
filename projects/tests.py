@@ -397,3 +397,10 @@ class DataIntegrityTests(ProjectTestCase):
 
         with self.assertRaises(ProtectedError):
             self.admin.delete()
+
+    def test_assigned_user_cannot_be_deleted_while_assigned(self):
+        """할당 기록의 user 쪽도 PROTECT다 (DAR-010, decisions.md)."""
+        from django.db.models import ProtectedError
+
+        with self.assertRaises(ProtectedError):
+            self.user_a.delete()

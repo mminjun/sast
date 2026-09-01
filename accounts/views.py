@@ -95,6 +95,7 @@ class UserListCreateView(APIView):
                 has_history=Exists(Project.objects.filter(created_by=OuterRef('pk')))
                 | Exists(AnalysisRun.objects.filter(created_by=OuterRef('pk')))
                 | Exists(ProjectMember.objects.filter(assigned_by=OuterRef('pk')))
+                | Exists(ProjectMember.objects.filter(user=OuterRef('pk')))
             )
         )
         return Response(UserListSerializer(users, many=True).data)
