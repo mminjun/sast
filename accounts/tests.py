@@ -302,7 +302,7 @@ class UserAdminApiPermissionTests(APITestCase):
 
 
 class UserListApiTests(APITestCase):
-    """SEC-006 — 목록은 id·email·role·is_active만 노출한다."""
+    """SEC-006 — 목록은 id·email·name·role·is_active만 노출한다."""
 
     def setUp(self):
         self.admin = User.objects.create_user(
@@ -316,7 +316,65 @@ class UserListApiTests(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(len(res.data), 2)
         for row in res.data:
-            self.assertEqual(set(row.keys()), {'id', 'email', 'role', 'is_active'})
+            self.assertEqual(
+                set(row.keys()),
+                {'id', 'email', 'name', 'role', 'is_active', 'projects', 'has_history'},
+            )
+
+    def test_list_includes_assigned_projects(self):
+        """할당 프로젝트는 id·name만 — 목록 화면 표시용 읽기 전용 (SFR-005 참조)."""
+        member = User.objects.create_user(email='pm@example.com', password=PASSWORD)
+        project = Project.objects.create(name='P1', created_by=self.admin)
+        ProjectMember.objects.create(project=project, user=member, assigned_by=self.admin)
+
+        res = self.client.get(reverse('users:user-list'))
+        row = next(r for r in res.data if r['email'] == 'pm@example.com')
+        self.assertEqual(row['projects'], [{'id': project.pk, 'name': 'P1'}])
+        # 할당이 없는 계정은 빈 목록이다.
+        admin_row = next(r for r in res.data if r['email'] == self.admin.email)
+        self.assertEqual(admin_row['projects'], [])
+
+    def test_has_history_matches_delete_protection(self):
+        """has_history는 삭제를 막는 PROTECT 참조와 같은 기준이다 (DAR-010).
+
+        True인 계정의 DELETE는 409, False인 계정의 DELETE는 204여야 안내가
+        거짓이 되지 않는다.
+        """
+        creator = User.objects.create_user(email='creator@example.com', password=PASSWORD)
+        runner = User.objects.create_user(email='runner@example.com', password=PASSWORD)
+        clean = User.objects.create_user(email='clean@example.com', password=PASSWORD)
+        project = Project.objects.create(name='P', created_by=creator)
+        AnalysisRun.objects.create(
+            project=project, created_by=runner, original_filename='src.zip',
+        )
+
+        res = self.client.get(reverse('users:user-list'))
+        flags = {row['email']: row['has_history'] for row in res.data}
+        self.assertTrue(flags['creator@example.com'])   # Project.created_by
+        self.assertTrue(flags['runner@example.com'])    # AnalysisRun.created_by
+        self.assertFalse(flags['clean@example.com'])
+
+        self.assertEqual(
+            self.client.delete(_detail_url(creator.pk)).status_code,
+            status.HTTP_409_CONFLICT,
+        )
+        self.assertEqual(
+            self.client.delete(_detail_url(clean.pk)).status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+
+    def test_has_history_covers_assigner(self):
+        """할당 감사 기록(assigned_by)도 이력이다."""
+        assigner = User.objects.create_user(
+            email='assigner@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        member = User.objects.create_user(email='mem@example.com', password=PASSWORD)
+        project = Project.objects.create(name='P', created_by=self.admin)
+        ProjectMember.objects.create(project=project, user=member, assigned_by=assigner)
+
+        res = self.client.get(reverse('users:user-list'))
+        flags = {row['email']: row['has_history'] for row in res.data}
+        self.assertTrue(flags['assigner@example.com'])
 
     def test_list_includes_inactive_users(self):
         User.objects.create_user(email='off@example.com', password=PASSWORD, is_active=False)
@@ -340,7 +398,7 @@ class UserCreateApiTests(AuthAPITestCase):
     def test_created_user_has_user_role(self):
         res = self.client.post(self.url, {'email': 'new@example.com', 'password': PASSWORD})
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(set(res.data.keys()), {'id', 'email', 'role', 'is_active'})
+        self.assertEqual(set(res.data.keys()), {'id', 'email', 'name', 'role', 'is_active'})
         self.assertEqual(res.data['role'], Role.USER)
         self.assertTrue(res.data['is_active'])
 
@@ -362,6 +420,18 @@ class UserCreateApiTests(AuthAPITestCase):
         )
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertTrue(res.data['is_active'])
+
+    def test_name_is_optional_and_stored(self):
+        """name은 선택 입력 — 주면 저장되고, 안 주면 빈 문자열이다."""
+        res = self.client.post(
+            self.url, {'email': 'named@example.com', 'password': PASSWORD, 'name': '홍길동'},
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['name'], '홍길동')
+
+        res = self.client.post(self.url, {'email': 'noname@example.com', 'password': PASSWORD})
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['name'], '')
 
     def test_password_is_stored_with_bcrypt(self):
         self.client.post(self.url, {'email': 'bc@example.com', 'password': PASSWORD})
@@ -544,6 +614,14 @@ class UserDeactivateApiTests(AuthAPITestCase):
         for body in ({}, {'is_active': 'maybe'}):
             res = self._patch(self.target.pk, body)
             self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_patch_updates_name_without_touching_is_active(self):
+        res = self._patch(self.target.pk, {'name': '김분석'})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['name'], '김분석')
+        self.target.refresh_from_db()
+        self.assertEqual(self.target.name, '김분석')
+        self.assertTrue(self.target.is_active)
 
     def test_deactivation_revokes_issued_access_token(self):
         """발급된 access 토큰도 다음 요청부터 401 — simplejwt가 DB의 is_active를 본다."""

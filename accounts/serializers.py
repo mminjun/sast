@@ -17,7 +17,33 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'email', 'role', 'is_active')
+        fields = ('id', 'email', 'name', 'role', 'is_active')
+        read_only_fields = fields
+
+
+class AssignedProjectSerializer(serializers.Serializer):
+    """할당 프로젝트 요약 — 관리 화면 표시용 최소 필드 (SEC-006)."""
+
+    id = serializers.IntegerField(read_only=True)
+    name = serializers.CharField(read_only=True)
+
+
+class UserListSerializer(UserSerializer):
+    """관리자용 목록 전용 — 할당 프로젝트 목록을 함께 내려준다 (읽기 전용).
+
+    MeView·생성/수정 응답에는 싣지 않는다 — 목록 화면에서만 쓰는 정보라
+    다른 응답 경로의 쿼리·노출 범위를 늘리지 않는다.
+    """
+
+    # Project.members의 related_name='projects' — 할당(ProjectMember) 기준이다.
+    projects = AssignedProjectSerializer(many=True, read_only=True)
+
+    # 뷰의 annotate가 채운다 — PROTECT 참조(활동 이력)가 있으면 삭제가 409로
+    # 거부되므로, UI가 삭제 버튼을 미리 비활성화할 수 있게 내려준다.
+    has_history = serializers.BooleanField(read_only=True)
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ('projects', 'has_history')
         read_only_fields = fields
 
 
@@ -34,7 +60,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'email', 'password', 'role', 'is_active')
+        fields = ('id', 'email', 'name', 'password', 'role', 'is_active')
         read_only_fields = ('id', 'role', 'is_active')
 
     def validate_email(self, value):
@@ -65,6 +91,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
                 return User.objects.create_user(
                     email=validated_data['email'],
                     password=validated_data['password'],
+                    name=validated_data.get('name', ''),
                 )
         except IntegrityError:
             raise serializers.ValidationError(
@@ -72,11 +99,17 @@ class UserCreateSerializer(serializers.ModelSerializer):
             )
 
 
-class UserActiveSerializer(serializers.Serializer):
-    """계정 활성 상태 변경 전용 (SEC-003, SEC-004).
+class UserUpdateSerializer(serializers.Serializer):
+    """계정 수정 전용 — 활성 상태 토글, 표시 이름 (SEC-003, SEC-004).
 
-    필드가 is_active 하나뿐이라 role·email·password는 본문에 실려 와도
+    필드를 is_active·name으로 한정해 role·email·password는 본문에 실려 와도
     구조적으로 도달할 수 없다 (mass assignment 방지).
     """
 
-    is_active = serializers.BooleanField(required=True)
+    is_active = serializers.BooleanField(required=False)
+    name = serializers.CharField(required=False, allow_blank=True, max_length=50)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError('변경할 필드(is_active, name)가 없습니다.')
+        return attrs

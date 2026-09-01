@@ -6,7 +6,7 @@ USERNAME_FIELD가 email이므로 별도 커스터마이징 없이 이메일로 �
 """
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.db.models.deletion import ProtectedError
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -16,9 +16,17 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from analysis.models import AnalysisRun
+from projects.models import Project, ProjectMember
+
 from .models import Role, User
 from .permissions import IsAdminRole
-from .serializers import UserActiveSerializer, UserCreateSerializer, UserSerializer
+from .serializers import (
+    UserCreateSerializer,
+    UserListSerializer,
+    UserSerializer,
+    UserUpdateSerializer,
+)
 
 
 class LoginView(TokenObtainPairView):
@@ -77,8 +85,19 @@ class UserListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsAdminRole]
 
     def get(self, request):
-        users = User.objects.order_by('id')
-        return Response(UserSerializer(users, many=True).data)
+        # has_history는 삭제를 막는 PROTECT 참조(활동 이력)와 같은 기준이어야
+        # 한다 — True인데 삭제가 통과하거나 False인데 409가 나면 안내가 거짓이 된다.
+        # prefetch — 사용자 수만큼 할당 프로젝트 쿼리가 늘지 않게 한다 (N+1 방지).
+        users = (
+            User.objects.order_by('id')
+            .prefetch_related('projects')
+            .annotate(
+                has_history=Exists(Project.objects.filter(created_by=OuterRef('pk')))
+                | Exists(AnalysisRun.objects.filter(created_by=OuterRef('pk')))
+                | Exists(ProjectMember.objects.filter(assigned_by=OuterRef('pk')))
+            )
+        )
+        return Response(UserListSerializer(users, many=True).data)
 
     def post(self, request):
         serializer = UserCreateSerializer(data=request.data)
@@ -88,7 +107,7 @@ class UserListCreateView(APIView):
 
 
 class UserDetailView(APIView):
-    """관리자용 계정 삭제·활성 상태 변경 (SEC-003).
+    """관리자용 계정 삭제·활성 상태·이름 변경 (SEC-003).
 
     삭제와 비활성화 모두 자기 자신·마지막 활성 관리자를 막는다 —
     관리 기능 접근 경로가 통째로 사라지는 상태를 방지한다.
@@ -146,13 +165,17 @@ class UserDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def patch(self, request, pk):
-        serializer = UserActiveSerializer(data=request.data)
+        serializer = UserUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        is_active = serializer.validated_data['is_active']
+        data = serializer.validated_data
 
         with transaction.atomic():
-            if is_active:
-                # 재활성화는 잠금 대상 축소 없이 단순 갱신 — 관리자 수가
+            if data.get('is_active') is False:
+                target, error = self._locked_target(request, pk)
+                if error is not None:
+                    return error
+            else:
+                # 재활성화·이름 변경은 잠금 없이 단순 갱신 — 관리자 수가
                 # 줄어드는 방향이 아니라 가드가 필요 없다. 멱등.
                 target = User.objects.filter(pk=pk).first()
                 if target is None:
@@ -161,12 +184,9 @@ class UserDetailView(APIView):
                     return Response(
                         self.FORBIDDEN_SELF, status=status.HTTP_400_BAD_REQUEST
                     )
-            else:
-                target, error = self._locked_target(request, pk)
-                if error is not None:
-                    return error
-            target.is_active = is_active
-            target.save(update_fields=['is_active'])
+            for field, value in data.items():
+                setattr(target, field, value)
+            target.save(update_fields=list(data))
         # 비활성화 즉시 효력은 별도 코드가 필요 없다 — simplejwt가 매 요청
         # DB의 is_active를 확인하므로 발급된 access 토큰도 다음 요청부터 401이다.
         return Response(UserSerializer(target).data)

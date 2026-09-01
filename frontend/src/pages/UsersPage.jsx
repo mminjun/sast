@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { formatUser } from '../utils/format.js';
 
 /**
  * 관리자용 사용자 관리 — 계정 생성·삭제·비활성화 (SEC-003).
@@ -13,6 +14,7 @@ export default function UsersPage() {
   const [users, setUsers] = useState(null);
   const [error, setError] = useState('');
   const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -32,9 +34,10 @@ export default function UsersPage() {
     setCreating(true);
     try {
       // role은 보내지 않는다 — 보내도 서버가 무시하고 USER로 생성한다.
-      const created = await api('/api/users/', { method: 'POST', body: { email, password } });
+      const created = await api('/api/users/', { method: 'POST', body: { email, password, name } });
       setUsers((prev) => [created, ...(prev || [])]);
       setEmail('');
+      setName('');
       setPassword('');
     } catch (err) {
       setCreateError(err instanceof ApiError ? err.detail : '생성에 실패했습니다.');
@@ -54,6 +57,25 @@ export default function UsersPage() {
       setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
     } catch (err) {
       setActionError(err instanceof ApiError ? err.detail : '상태 변경에 실패했습니다.');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleRename = async (target) => {
+    // 폼 상태·모달 없이 처리한다 — 이 페이지의 confirm 사용과 같은 결의 최소 UI.
+    const next = window.prompt('표시할 이름 (50자 이하, 비우면 이메일만 표시)', target.name || '');
+    if (next === null || next.trim() === (target.name || '')) return;
+    setActionError('');
+    setActionId(target.id);
+    try {
+      const updated = await api(`/api/users/${target.id}/`, {
+        method: 'PATCH',
+        body: { name: next.trim() },
+      });
+      setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.detail : '이름 변경에 실패했습니다.');
     } finally {
       setActionId(null);
     }
@@ -92,6 +114,13 @@ export default function UsersPage() {
           required
         />
         <input
+          type="text"
+          placeholder="이름 (선택)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={50}
+        />
+        <input
           type="password"
           placeholder="비밀번호 (8자 이상)"
           value={password}
@@ -117,19 +146,24 @@ export default function UsersPage() {
               <th>이메일</th>
               <th>역할</th>
               <th>상태</th>
+              <th>할당 프로젝트</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {users.map((u) => (
               <tr key={u.id}>
-                <td>{u.email}</td>
+                <td>{formatUser(u)}</td>
                 <td>
                   <span className={`badge role-${u.role === 'ADMIN' ? 'admin' : 'user'}`}>
                     {u.role === 'ADMIN' ? '관리자' : '일반'}
                   </span>
                 </td>
                 <td className={u.is_active ? '' : 'muted'}>{u.is_active ? '활성' : '비활성'}</td>
+                <td className="muted">
+                  {/* 표시 전용 — 할당/해제는 프로젝트 상세의 멤버 관리에서 한다 (SFR-005). */}
+                  {u.projects?.length ? u.projects.map((p) => p.name).join(', ') : '—'}
+                </td>
                 <td className="row-actions">
                   {u.id === me?.id ? (
                     <span className="muted small">본인</span>
@@ -145,8 +179,21 @@ export default function UsersPage() {
                       </button>
                       <button
                         type="button"
-                        className="btn btn-danger"
+                        className="btn"
                         disabled={actionId !== null}
+                        onClick={() => handleRename(u)}
+                      >
+                        이름 수정
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        disabled={actionId !== null || u.has_history}
+                        title={
+                          u.has_history
+                            ? '이력이 있어 삭제할 수 없습니다. 비활성화하세요.'
+                            : undefined
+                        }
                         onClick={() => handleDelete(u)}
                       >
                         삭제

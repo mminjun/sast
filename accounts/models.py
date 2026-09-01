@@ -62,6 +62,9 @@ class User(AbstractUser):
     username = None
     email = models.EmailField('이메일', unique=True)
 
+    # 표시용 이름. 식별자는 여전히 email이라 유일성·필수 제약을 두지 않는다.
+    name = models.CharField('이름', max_length=50, blank=True)
+
     # 기본값을 일반 사용자로 둔다 — 실수로 만들어진 계정이 관리자 권한을
     # 갖지 않도록 (SEC-003).
     role = models.CharField(

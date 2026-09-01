@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { formatUser } from '../utils/format.js';
 
 export default function ProjectListPage() {
   // 관리자 전용 UI 노출은 편의일 뿐이다 — 실제 차단은 서버의 IsAdminRole·스코프
@@ -89,7 +90,7 @@ export default function ProjectListPage() {
                   <Link to={`/projects/${p.id}`}>{p.name}</Link>
                 </td>
                 <td className="muted">{p.description || '—'}</td>
-                <td>{p.created_by?.email}</td>
+                <td>{formatUser(p.created_by)}</td>
                 <td>{new Date(p.created_at).toLocaleDateString('ko-KR')}</td>
               </tr>
             ))}

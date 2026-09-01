@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
+import { formatUser } from '../utils/format.js';
 
 export default function ProjectDetailPage() {
   const { id } = useParams();
@@ -211,7 +212,7 @@ export default function ProjectDetailPage() {
                 )
                 .map((u) => (
                   <option key={u.id} value={u.id}>
-                    {u.email}
+                    {formatUser(u)}
                   </option>
                 ))}
             </select>
@@ -236,8 +237,8 @@ export default function ProjectDetailPage() {
               <tbody>
                 {members.map((m) => (
                   <tr key={m.id}>
-                    <td>{m.user.email}</td>
-                    <td className="muted">{m.assigned_by?.email || '—'}</td>
+                    <td>{formatUser(m.user)}</td>
+                    <td className="muted">{formatUser(m.assigned_by)}</td>
                     <td>{new Date(m.assigned_at).toLocaleString('ko-KR')}</td>
                     <td className="row-actions">
                       <button
