@@ -242,6 +242,42 @@ ANALYSIS_SEMGREP_TIMEOUT = 120  # 초 — 타임아웃 시 FAILED로 기록
 ANALYSIS_SCAN_TARGET_SUFFIXES = ('.py',)
 
 
+# 접근 로그 (RFP 요구 아님 — 열람 이력 추적용 자체 개선, docs/decisions.md 2026-09-01)
+# 결과 열람(실행 상세·결과 목록·집계) 이력을 logs/access.log에 남긴다.
+# 시각은 formatter의 asctime이 붙인다. .gitignore의 `/logs/` 규칙으로 커밋에서 제외.
+ACCESS_LOG_DIR = BASE_DIR / 'logs'
+ACCESS_LOG_DIR.mkdir(exist_ok=True)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'access': {
+            'format': '{asctime} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'access_file': {
+            'class': 'logging.FileHandler',
+            'filename': ACCESS_LOG_DIR / 'access.log',
+            'encoding': 'utf-8',
+            # 첫 기록 시점에 파일을 연다 — 파일을 열 수 없는 환경에서도 기동과
+            # 요청 처리는 영향받지 않는다 (핸들러 오류는 logging 모듈이 삼킨다).
+            'delay': True,
+            'formatter': 'access',
+        },
+    },
+    'loggers': {
+        'access': {
+            'handlers': ['access_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
+
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 

@@ -496,3 +496,32 @@ class ExecuteStatusTests(AnalysisTestCase):
 
         self.assertEqual(retry.status_code, status.HTTP_200_OK)
         self.assertEqual(retry.data['status'], AnalysisStatus.SUCCEEDED)
+
+
+class AccessLogTests(AnalysisTestCase):
+    """결과 열람 접근 로그 (RFP 외 자체 개선, docs/decisions.md 2026-09-01)."""
+
+    def _make_run(self, project):
+        return AnalysisRun.objects.create(
+            project=project, created_by=self.admin, original_filename='src.zip',
+        )
+
+    def test_run_detail_view_is_logged(self):
+        run = self._make_run(self.project_a)
+        self.login(self.user_a)
+        with self.assertLogs('access', level='INFO') as captured:
+            res = self.client.get(detail_url(run.pk))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        line = captured.output[0]
+        self.assertIn('user=a@example.com', line)
+        self.assertIn('action=run_detail', line)
+        self.assertIn(f'run={run.pk}', line)
+        self.assertIn(f'project={self.project_a.pk}', line)
+
+    def test_denied_view_is_not_logged(self):
+        """스코프 밖 404는 열람이 아니다 — 기록을 남기지 않는다."""
+        run = self._make_run(self.project_b)
+        self.login(self.user_a)
+        with self.assertNoLogs('access', level='INFO'):
+            res = self.client.get(detail_url(run.pk))
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)

@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminRole
 from analysis.models import AnalysisRun
+from config.access_log import log_access
 
 from .models import DiagnosticRule, Finding, KisaCategory, Severity
 from .serializers import DiagnosticRuleSerializer, FindingSerializer
@@ -202,10 +203,13 @@ class RunFindingsMixin:
     """
 
     def get_run(self):
-        return get_object_or_404(
-            _scoped_analysis_runs(self.request.user),
-            pk=self.kwargs['run_id'],
-        )
+        # 한 요청에서 여러 번 불려도(쿼리셋 구성 → 접근 로그) 조회는 한 번만 한다.
+        if not hasattr(self, '_run'):
+            self._run = get_object_or_404(
+                _scoped_analysis_runs(self.request.user),
+                pk=self.kwargs['run_id'],
+            )
+        return self._run
 
 
 class RunFindingListView(RunFindingsMixin, generics.ListAPIView):
@@ -214,6 +218,13 @@ class RunFindingListView(RunFindingsMixin, generics.ListAPIView):
     serializer_class = FindingSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = FindingPagination
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        # 스코프·필터 검증을 통과해 응답이 만들어진 뒤에만 남긴다 (404·400 제외).
+        run = self.get_run()
+        log_access(request.user, 'findings_list', run_id=run.pk, project_id=run.project_id)
+        return response
 
     def get_queryset(self):
         run = self.get_run()
@@ -255,6 +266,7 @@ class RunFindingSummaryView(RunFindingsMixin, APIView):
 
     def get(self, request, run_id):
         run = self.get_run()
+        log_access(request.user, 'findings_summary', run_id=run.pk, project_id=run.project_id)
         findings = Finding.objects.filter(run=run)
 
         severity_counts = dict(findings.values_list('severity').annotate(n=Count('id')))

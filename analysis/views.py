@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminRole
+from config.access_log import log_access
 from projects.models import Project
 
 from .models import AnalysisRun
@@ -82,6 +83,12 @@ class AnalysisRunDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         return _scoped_analysis_runs(self.request.user)
+
+    def retrieve(self, request, *args, **kwargs):
+        run = self.get_object()
+        # 스코프 검증을 통과한 열람만 남긴다 — 404는 열람이 아니다.
+        log_access(request.user, 'run_detail', run_id=run.pk, project_id=run.project_id)
+        return Response(self.get_serializer(run).data)
 
 
 class AnalysisRunExecuteView(APIView):

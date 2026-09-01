@@ -1091,3 +1091,27 @@ class SeedDocumentationTests(SimpleTestCase):
             if not reason:
                 continue
             self.assertIn(re.sub(r'\s+', ' ', reason), self.doc, rule['code'])
+
+
+class AccessLogTests(CatalogApiTestCase):
+    """결과 열람 접근 로그 (RFP 외 자체 개선, docs/decisions.md 2026-09-01)."""
+
+    def test_findings_list_and_summary_are_logged(self):
+        self.login(self.member)
+        with self.assertLogs('access', level='INFO') as captured:
+            self.client.get(findings_url(self.run.pk))
+            self.client.get(findings_summary_url(self.run.pk))
+        joined = '\n'.join(captured.output)
+        self.assertIn('user=member@example.com', joined)
+        self.assertIn('action=findings_list', joined)
+        self.assertIn('action=findings_summary', joined)
+        self.assertIn(f'run={self.run.pk}', joined)
+        self.assertIn(f'project={self.project.pk}', joined)
+
+    def test_denied_and_invalid_requests_are_not_logged(self):
+        """스코프 밖 404·필터 400은 열람이 아니다 — 기록을 남기지 않는다."""
+        with self.assertNoLogs('access', level='INFO'):
+            self.login(self.outsider)
+            self.client.get(findings_url(self.run.pk))
+            self.login(self.member)
+            self.client.get(findings_url(self.run.pk), {'severity': 'XX'})
