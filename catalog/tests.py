@@ -1093,6 +1093,70 @@ class SeedDocumentationTests(SimpleTestCase):
             self.assertIn(re.sub(r'\s+', ' ', reason), self.doc, rule['code'])
 
 
+class RunSeverityCountTests(CatalogApiTestCase):
+    """SFR-016 — run 목록·상세 응답(analysis API)의 심각도별 건수.
+
+    검증 대상 엔드포인트는 analysis 앱이지만 건수의 원천(Finding)이 이 앱 소유라
+    테스트를 여기에 둔다 — analysis/*.py에는 catalog import를 두지 않는다
+    (QLT-001, SignalWiringTests의 소스 가드).
+    """
+
+    def run_list_url(self, project_id):
+        return reverse('analysis:analysis-run-list', args=[project_id])
+
+    def run_detail_url(self, run_id):
+        return reverse('analysis:analysis-run-detail', args=[run_id])
+
+    def test_detail_includes_severity_counts(self):
+        self.add_finding()                        # HIGH (KISA-IV-01)
+        self.add_finding(rule=self.debug_rule)    # MEDIUM (KISA-EN-02)
+        self.add_finding(severity=Severity.LOW)
+        self.add_finding(severity=Severity.LOW)
+        self.login(self.member)
+        response = self.client.get(self.run_detail_url(self.run.pk))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data['severity_counts'], {'high': 1, 'medium': 1, 'low': 2},
+        )
+
+    def test_list_includes_severity_counts(self):
+        self.add_finding()
+        self.add_finding()
+        self.login(self.member)
+        response = self.client.get(self.run_list_url(self.project.pk))
+        row = next(r for r in response.data if r['id'] == self.run.pk)
+        self.assertEqual(row['severity_counts'], {'high': 2, 'medium': 0, 'low': 0})
+
+    def test_run_without_findings_has_zero_counts(self):
+        self.login(self.member)
+        response = self.client.get(self.run_detail_url(self.run.pk))
+        self.assertEqual(
+            response.data['severity_counts'], {'high': 0, 'medium': 0, 'low': 0},
+        )
+
+    def test_list_query_count_does_not_grow_with_runs(self):
+        """annotate 방식 검증 — 실행·결과가 늘어도 목록 쿼리 수는 그대로다 (N+1 없음)."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self.add_finding()
+        self.login(self.member)
+
+        with CaptureQueriesContext(connection) as baseline:
+            self.client.get(self.run_list_url(self.project.pk))
+
+        for _ in range(3):
+            extra_run = self.make_run(self.project, self.admin)
+            self.add_finding(run=extra_run)
+            self.add_finding(run=extra_run, rule=self.debug_rule)
+
+        with CaptureQueriesContext(connection) as grown:
+            response = self.client.get(self.run_list_url(self.project.pk))
+
+        self.assertEqual(len(response.data), 4)
+        self.assertEqual(len(baseline), len(grown))
+
+
 class AccessLogTests(CatalogApiTestCase):
     """결과 열람 접근 로그 (RFP 외 자체 개선, docs/decisions.md 2026-09-01)."""
 

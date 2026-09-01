@@ -154,6 +154,7 @@ export default function ProjectDetailPage() {
               <th>#</th>
               <th>파일</th>
               <th>상태</th>
+              <th>결과</th>
               <th>업로드</th>
               <th>완료</th>
               <th></th>
@@ -168,6 +169,11 @@ export default function ProjectDetailPage() {
                 <td>{run.original_filename}</td>
                 <td>
                   <StatusBadge status={run.status} />
+                </td>
+                <td className="muted">
+                  {run.status === 'SUCCEEDED' && run.severity_counts
+                    ? `높음 ${run.severity_counts.high} · 보통 ${run.severity_counts.medium} · 낮음 ${run.severity_counts.low}`
+                    : '—'}
                 </td>
                 <td>{new Date(run.created_at).toLocaleString('ko-KR')}</td>
                 <td>{run.finished_at ? new Date(run.finished_at).toLocaleString('ko-KR') : '—'}</td>
