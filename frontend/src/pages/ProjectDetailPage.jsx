@@ -273,7 +273,7 @@ export default function ProjectDetailPage() {
                   )}
                   {(run.status === 'SUCCEEDED' || run.status === 'FAILED') && (
                     <Link to={`/runs/${run.id}`} className="btn">
-                      결과 보기
+                      결과
                     </Link>
                   )}
                   {run.status === 'SUCCEEDED' && (

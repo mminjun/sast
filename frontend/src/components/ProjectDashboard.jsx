@@ -5,11 +5,13 @@ import { api } from '../api/client.js';
 import DiffStatusBadge from './DiffStatusBadge.jsx';
 
 // 심각도 색은 SeverityBadge와 같은 팔레트(index.css 변수)를 쓴다.
+// 표기는 화면 전체와 동일하게 한글 — 등급 값(HIGH 등)은 API 내부 표현이다.
 const SEGMENTS = [
-  { key: 'high', label: 'HIGH', className: 'trend-seg-high' },
-  { key: 'medium', label: 'MEDIUM', className: 'trend-seg-medium' },
-  { key: 'low', label: 'LOW', className: 'trend-seg-low' },
+  { key: 'high', label: '높음', className: 'trend-seg-high' },
+  { key: 'medium', label: '보통', className: 'trend-seg-medium' },
+  { key: 'low', label: '낮음', className: 'trend-seg-low' },
 ];
+const SEVERITY_LABELS = { HIGH: '높음', MEDIUM: '보통', LOW: '낮음' };
 const BAR_AREA_HEIGHT = 120; // px — 추이 막대 영역의 최대 높이
 const COMPARE_PREVIEW_COUNT = 5;
 const TOP_RULE_COUNT = 5;
@@ -92,7 +94,7 @@ export default function ProjectDashboard({ projectId, runs }) {
           </span>
         </div>
         <div className="stat">
-          <span className="stat-label">남은 HIGH</span>
+          <span className="stat-label">남은 높음</span>
           <span className="stat-number">{counts.high}</span>
           <span className="stat-caption">최신 회차 기준</span>
         </div>
@@ -104,9 +106,9 @@ export default function ProjectDashboard({ projectId, runs }) {
           <span className="trend-title">
             <strong>실행별 탐지 추이</strong>
             <span className="trend-legend small">
-              <span className="trend-legend-high">HIGH</span> /{' '}
-              <span className="trend-legend-medium">MEDIUM</span> /{' '}
-              <span className="trend-legend-low">LOW</span>
+              <span className="trend-legend-high">높음</span> /{' '}
+              <span className="trend-legend-medium">보통</span> /{' '}
+              <span className="trend-legend-low">낮음</span>
             </span>
           </span>
           <select value={windowSize} onChange={(e) => setWindowSize(e.target.value)}>
@@ -174,7 +176,7 @@ export default function ProjectDashboard({ projectId, runs }) {
                     </span>
                   </span>
                   <span className={`small trend-legend-${item.severity.toLowerCase()}`}>
-                    {item.severity}
+                    {SEVERITY_LABELS[item.severity] || item.severity}
                   </span>
                 </li>
               ))}
