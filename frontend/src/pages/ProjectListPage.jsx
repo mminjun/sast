@@ -90,12 +90,17 @@ export default function ProjectListPage() {
           <tbody>
             {projects.map((p) => (
               <tr key={p.id}>
-                <td>
+                <td className="truncate" title={p.name}>
                   <Link to={`/projects/${p.id}`}>{p.name}</Link>
                 </td>
-                <td className="muted">{p.description || '—'}</td>
+                <td
+                  className="muted truncate"
+                  title={p.description || undefined}
+                >
+                  {p.description || '—'}
+                </td>
                 <td>{formatUser(p.created_by)}</td>
-                <td>{formatDate(p.created_at)}</td>
+                <td className="nowrap">{formatDate(p.created_at)}</td>
               </tr>
             ))}
           </tbody>
