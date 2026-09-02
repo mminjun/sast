@@ -65,31 +65,38 @@ export default function ProjectDashboard({ projectId, runs }) {
 
   return (
     <>
+      {/* 3단 구성: 라벨 / 숫자 / 캡션 — 캡션이 "무엇 기준의 숫자인가"를 설명한다 */}
       <div className="stat-row">
         <div className="stat">
+          <span className="stat-label">탐지 건수</span>
           <span className="stat-number">{total(counts)}</span>
-          <span className="stat-label muted">최근 실행 탐지 (#{latest.sequence ?? latest.id})</span>
+          <span className="stat-caption">최신 회차 (#{latest.sequence ?? latest.id})</span>
         </div>
         <div className="stat">
+          <span className="stat-label">신규</span>
           <span className={`stat-number ${hasBase && diff.summary.new > 0 ? 'stat-up' : ''}`}>
             {hasBase ? `+${diff.summary.new}` : '—'}
           </span>
-          <span className="stat-label muted">신규</span>
+          <span className="stat-caption">
+            {/* diff 로딩 중에는 판단을 미룬다 — '이전 회차 없음'이 잠깐 떴다 바뀌지 않게 */}
+            {!diff ? ' ' : hasBase ? `#${diff.base.sequence} 대비` : '이전 회차 없음'}
+          </span>
         </div>
         <div className="stat">
+          <span className="stat-label">해결</span>
           <span className={`stat-number ${hasBase && diff.summary.resolved > 0 ? 'stat-down' : ''}`}>
             {hasBase ? `−${diff.summary.resolved}` : '—'}
           </span>
-          <span className="stat-label muted">해결</span>
+          <span className="stat-caption">
+            {!diff ? ' ' : hasBase ? `#${diff.base.sequence} 대비` : '이전 회차 없음'}
+          </span>
         </div>
         <div className="stat">
+          <span className="stat-label">남은 HIGH</span>
           <span className="stat-number">{counts.high}</span>
-          <span className="stat-label muted">HIGH 잔존</span>
+          <span className="stat-caption">최신 회차 기준</span>
         </div>
       </div>
-      {!hasBase && !diffFailed && diff && (
-        <p className="muted small">이전 완료 실행이 없어 신규·해결을 계산할 수 없습니다.</p>
-      )}
       {diffFailed && <p className="muted small">비교 정보를 불러오지 못했습니다.</p>}
 
       <div className="card">

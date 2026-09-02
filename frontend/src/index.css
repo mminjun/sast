@@ -509,8 +509,9 @@ td.truncate {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 0.7rem 1.2rem;
-  min-width: 110px;
+  /* 3단(라벨/숫자/캡션) 구성 — 세로 여백을 조금 더 준다 */
+  padding: 0.8rem 1.3rem;
+  min-width: 130px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -524,6 +525,12 @@ td.truncate {
 
 .stat-label {
   font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* 메트릭 카드 3단(라벨/숫자/캡션)의 캡션 — 숫자가 무엇 기준인지 설명 */
+.stat-caption {
+  font-size: 12px;
   color: var(--muted);
 }
 
