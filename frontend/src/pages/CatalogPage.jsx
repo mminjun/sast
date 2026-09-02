@@ -42,7 +42,7 @@ export default function CatalogPage() {
       {summary && (
         <p className="muted">
           전체 {summary.total}개 중 <strong>{summary.implemented}개</strong> 실탐지 구현
-          (미구현 {summary.not_implemented}개는 대상 언어·범위 밖 — 기준 자체는 전부 등록)
+          (미구현 {summary.not_implemented}개는 기준 자체는 전부 등록)
         </p>
       )}
 
