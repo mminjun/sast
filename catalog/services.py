@@ -16,6 +16,7 @@ from django.db import transaction
 from analysis.models import AnalysisRun
 from analysis.services import source_dir
 
+from .fingerprint import assign_fingerprints
 from .models import DiagnosticRule, Finding, Severity
 
 # 코드 조각 저장 상한. Semgrep이 조각을 주지 않아 우리가 직접 파일에서 읽으므로
@@ -212,6 +213,9 @@ def ingest_findings(run):
             skipped += 1
             continue
         findings.append(finding)
+
+    # diff 매칭 키. run 단위·결정적 계산이라 재수집해도 같은 값이 나온다(멱등성 유지).
+    assign_fingerprints(findings)
 
     with transaction.atomic():
         # 같은 run의 표준화를 직렬화한다. 잠그지 않으면 거의 동시에 들어온 재표준화

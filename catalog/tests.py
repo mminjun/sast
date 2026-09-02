@@ -37,6 +37,7 @@ from analysis.services import run_semgrep, source_dir
 from analysis.signals import run_succeeded
 from projects.models import Project, ProjectMember
 
+from .fingerprint import backfill_fingerprints, base_fingerprint
 from .models import DiagnosticRule, Finding, KisaCategory, Severity
 from .services import bare_check_id, ingest_findings, normalize_severity
 from .views import FindingPagination
@@ -497,6 +498,90 @@ class IngestTests(WorkspaceMixin, TestCase):
         finding = Finding.objects.get(run=self.run)
         self.assertIsNotNone(finding.rule)
         self.assertEqual(finding.severity, Severity.HIGH)
+
+
+class FingerprintTests(WorkspaceMixin, TestCase):
+    """실행 간 diff의 매칭 키 — 라인 밀림에 안정적이고, 순번은 항상·결정적으로 붙는다.
+
+    규칙 상세와 기각한 대안은 docs/decisions.md 2026-09-02.
+    """
+
+    def setUp(self):
+        super().setUp()
+        seed()
+        self.setup_workspace()
+        self.admin = User.objects.create_user(
+            email='admin@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        self.project = Project.objects.create(name='p', created_by=self.admin)
+        self.run = self.make_run(self.project, self.admin)
+
+    def ingest(self, results):
+        self.run.raw_result = {'results': results}
+        self.run.save(update_fields=['raw_result'])
+        return ingest_findings(self.run)
+
+    def test_line_shift_and_reformat_keep_fingerprint(self):
+        """라인 번호는 키에 없고 공백은 정규화된다 — 줄 밀림·들여쓰기 변경에 안정."""
+        target = self.write_source(self.run, 'app/db.py', 'q = 1\n')
+        self.ingest([semgrep_result(target, 'KISA-IV-01', line=1)])
+        before = Finding.objects.get(run=self.run).fingerprint
+
+        # 위에 두 줄이 끼어들고 들여쓰기까지 바뀌어도 같은 취약점이다.
+        self.write_source(self.run, 'app/db.py', '# a\n# b\n    q  =  1\n')
+        self.ingest([semgrep_result(target, 'KISA-IV-01', line=3)])
+        after = Finding.objects.get(run=self.run).fingerprint
+
+        self.assertEqual(before, after)
+
+    def test_duplicates_get_sequence_by_start_line(self):
+        """동일 코드 중복은 start_line 오름차순으로 :1, :2."""
+        target = self.write_source(self.run, 'app/db.py', 'q = 1\nq = 1\n')
+        self.ingest([
+            # raw_result 순서와 무관하게 줄 순서로 순번이 붙는지 — 역순으로 넣는다.
+            semgrep_result(target, 'KISA-IV-01', line=2),
+            semgrep_result(target, 'KISA-IV-01', line=1),
+        ])
+        first, second = Finding.objects.filter(run=self.run).order_by('start_line')
+        base, _, seq = first.fingerprint.rpartition(':')
+        self.assertEqual(seq, '1')
+        self.assertEqual(second.fingerprint, f'{base}:2')
+
+    def test_single_instance_still_gets_sequence(self):
+        """중복 1건뿐이어도 :1 — 중복이 2→1로 줄 때 키가 바뀌지 않게 항상 부여."""
+        target = self.write_source(self.run, 'app/db.py', 'q = 1\n')
+        self.ingest([semgrep_result(target, 'KISA-IV-01')])
+        self.assertRegex(
+            Finding.objects.get(run=self.run).fingerprint, r'^[0-9a-f]{64}:1$',
+        )
+
+    def test_unmapped_without_claimed_code_uses_check_id(self):
+        """rule_code가 비면 semgrep_check_id로 폴백한다 (__str__과 같은 규칙)."""
+        target = self.write_source(self.run, 'app/x.py', 'x = 1\n')
+        self.ingest([semgrep_result(target, '', check_id='custom-rule')])
+
+        finding = Finding.objects.get(run=self.run)
+        self.assertEqual(finding.rule_code, '')
+        expected = base_fingerprint('', 'custom-rule', finding.file_path, 'x = 1')
+        self.assertEqual(finding.fingerprint, f'{expected}:1')
+
+    def test_backfill_reproduces_ingest_fingerprints(self):
+        """마이그레이션 백필이 ingest와 같은 값을 내는지 — 같은 함수를 검증한다."""
+        target = self.write_source(self.run, 'app/db.py', 'q = 1\nq = 1\nr = 2\n')
+        self.ingest([
+            semgrep_result(target, 'KISA-IV-01', line=1),
+            semgrep_result(target, 'KISA-IV-01', line=2),
+            semgrep_result(target, 'KISA-IV-02', line=3),
+        ])
+        expected = dict(Finding.objects.filter(run=self.run).values_list('id', 'fingerprint'))
+
+        # 격리 디렉토리가 지워진 뒤라도(파일시스템 접근 없이) DB 값만으로 복원돼야 한다.
+        shutil.rmtree(source_dir(self.run), ignore_errors=True)
+        Finding.objects.update(fingerprint='')
+        backfill_fingerprints(Finding)
+
+        actual = dict(Finding.objects.filter(run=self.run).values_list('id', 'fingerprint'))
+        self.assertEqual(actual, expected)
 
 
 class PathDisclosureTests(WorkspaceMixin, TestCase):
