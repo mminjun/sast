@@ -90,6 +90,14 @@ export default function ProjectDashboard({ projectId, runs }) {
             {hasBase ? `−${diff.summary.resolved}` : '—'}
           </span>
           <span className="stat-caption">
+            {!diff ? ' ' : hasBase ? `#${diff.base.sequence} 대비` : '이전 회차 없음'}
+          </span>
+        </div>
+        <div className="stat">
+          {/* 비교 페이지의 상태 칩과 같은 구성(신규/해결/유지) */}
+          <span className="stat-label">유지</span>
+          <span className="stat-number">{hasBase ? diff.summary.persisted : '—'}</span>
+          <span className="stat-caption">
             {!diff ? ' ' : hasBase ? `#${diff.base.sequence} 대비` : '이전 회차 없음'}
           </span>
         </div>
