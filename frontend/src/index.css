@@ -423,12 +423,15 @@ td.truncate {
 }
 
 .popover {
-  position: absolute;
+  /* fixed(뷰포트 기준) — 카드의 overflow:hidden에 잘리지 않는다.
+     top/left는 트리거 위치에서 JS가 인라인으로 준다. */
+  position: fixed;
   z-index: 10;
-  top: calc(100% + 6px);
-  left: 0;
   min-width: 220px;
   max-width: 320px;
+  /* 프로젝트가 많아도 화면을 덮지 않게 — 내부 스크롤 */
+  max-height: 240px;
+  overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;

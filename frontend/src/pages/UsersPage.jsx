@@ -1,15 +1,43 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-/** 할당 프로젝트 전체 목록 팝오버 — 셀은 요약만 보여주고 클릭 시 띄운다. */
+/** 할당 프로젝트 전체 목록 팝오버 — 셀은 요약만 보여주고 클릭 시 띄운다.
+
+    테이블 카드가 라운드 코너용 overflow:hidden이라 absolute로는 경계에서
+    잘린다 — position:fixed(뷰포트 기준)로 띄우고, 열려 있는 동안 스크롤·
+    리사이즈마다 트리거 위치를 다시 계산한다. */
 function ProjectsPopover({ projects, open, onToggle }) {
+  const triggerRef = useRef(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPosition({
+        top: rect.bottom + 6,
+        // 뷰포트 오른쪽 밖으로 나가지 않게 여유폭(팝오버 max-width+α)만큼 당긴다.
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 340)),
+      });
+    };
+    place();
+    // capture — 페이지 스크롤뿐 아니라 내부 스크롤 컨테이너에도 반응한다.
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open]);
+
   return (
     <span className="popover-wrap">
-      <button type="button" className="link-dotted" onClick={onToggle}>
+      <button type="button" className="link-dotted" ref={triggerRef} onClick={onToggle}>
         {projects[0].name}
         {projects.length > 1 && ` 외 ${projects.length - 1}개`}
       </button>
       {open && (
-        <div className="popover">
+        <div className="popover" style={{ top: position.top, left: position.left }}>
           <p className="muted small popover-title">할당 프로젝트 {projects.length}개</p>
           <ul>
             {projects.map((p) => (
