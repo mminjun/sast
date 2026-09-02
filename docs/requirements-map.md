@@ -14,7 +14,7 @@
 | SFR-007 | 분석 대상 소스 관리 | ✅ | analysis/views.py `ProjectAnalysisRunsView` + frontend `ProjectDetailPage` | zip 업로드, Zip Slip 방어(SEC-008), 관리자만. 업로드 UI 완결(8/28) |
 | SFR-008 | 정적 분석 실행 | ✅ | analysis/views.py `AnalysisRunExecuteView` + frontend 실행 버튼(`ProjectDetailPage`/`RunDetailPage`) | 업로드와 분리된 2단계 트리거, 관리자만. 동기 실행 중 버튼 잠금 UI(8/28) |
 | SFR-009 | 분석 처리 체계 | ✅ | analysis/services.py `run_semgrep` | Semgrep subprocess 동기 연계. 룰셋을 `p/python`에서 자체 KISA 룰(`catalog/rules/`)로 교체 완료. `--no-git-ignore`·`PYTHONUTF8=1`·`encoding='utf-8'` 필요 (docs/decisions.md 외부 도구 연계 문제) |
-| SFR-010 | 분석 언어 확장성 | ✅ | catalog/rules + catalog 전반 | 구조로 충족 — 카탈로그 49개는 언어 중립, 탐지는 룰 YAML 추가만으로 확장(파서·모델·API에 언어 분기 없음), 엔진이 다중 언어 지원. 실제 2번째 언어 룰은 미작성(범위 선택, plan.md §5) |
+| SFR-010 | 분석 언어 확장성 | ✅ | catalog/rules + catalog 전반 | 완료(9/2 판정 조정, decisions.md) — 요구는 "확장 가능한 구조"이고 카탈로그 49개는 언어 중립, 파서·모델·API에 언어 분기 없이 룰 YAML 추가만으로 확장, 엔진이 다중 언어 지원. 실제 추가 언어 룰 작성은 SFR-011(미구현)로 분리 |
 | SFR-011 | 초기 분석 대상 지원 | ❌ | - | Python만 (Java/JS 비목표) |
 | SFR-012 | 진단 항목 등록 | ✅ | catalog/management/commands/seed_catalog.py | 룰 YAML 1개 추가 + 시드 재실행이면 코드 수정 없이 카탈로그 반영. kisa_code 오타는 시드 시점에 실패(드리프트 감지) |
 | SFR-013 | 진단 기준 카탈로그 | ✅ | catalog/models.py `DiagnosticRule` + `/api/catalog/rules/` + frontend `CatalogPage` | 49개 전부 등록, 그중 21개 실탐지(8/29 룰 8개 추가). 유형·심각도·구현여부 필터, `/api/catalog/summary/` 집계. 49개 표시·필터 UI 완결(8/28). 심각도 범례 카드(등급 정책·폴백 각주, 8/29) |
@@ -33,7 +33,7 @@
 | DAR-005 | 분석 실행 데이터 | ✅ | analysis/models.py `AnalysisRun` | workspace_id(UUID)로 격리 디렉토리 명명, raw_result는 Semgrep 원본 |
 | DAR-006 | 진단 결과 데이터 | ✅ | catalog/models.py `Finding` (`catalog_finding`) | 표준화된 결과. file_path는 격리 루트 기준 상대경로, semgrep_check_id는 접두사 제거 후 저장 |
 | DAR-007 | 진단 기준 데이터 | ✅ | catalog/models.py `DiagnosticRule` (`catalog_rule`) | KISA 49개. code unique, severity_reason으로 등급 근거 보관 — 49개 전체 완비(8/29, 실탐지 13개→전체 확장) |
-| DAR-008 | 분석 시점 이력 보존 | ❌ | catalog/models.py `Finding` 스냅샷 컬럼 | 단순화 — rule_code·rule_name·severity만 복사(전체 이력 테이블 비목표) |
+| DAR-008 | 분석 시점 이력 보존 | ✅ | catalog/models.py `Finding` 스냅샷 컬럼 | 완료(9/2 판정 조정, decisions.md) — 요구의 보존 위치는 "진단 결과에"이고 항목 코드·명칭·심각도를 결과 행에 복사해 달성. 카탈로그 자체의 시점별 버전 관리는 요구에 없는 확장이라 범위 외. 한계: 유형(category)은 rule 참조로 남아 기준 개정 시 혼합 표시 가능 |
 | DAR-009 | 구조화된 부가정보 | ✅ | JSONField | `DiagnosticRule.semgrep_rule_ids`/`extra`, `Finding.extra`(cwe·kisa_name·semgrep_severity) |
 | DAR-010 | 데이터 관계 무결성 | ✅ | FK 제약 + 인덱스 | projects: created_by PROTECT, 멤버십 CASCADE, UniqueConstraint(project,user). analysis: project CASCADE, created_by PROTECT, workspace_id unique. catalog: run CASCADE, rule PROTECT(미매핑 허용 null), code unique, (run,severity)·(run,rule) 인덱스 |
 
@@ -74,17 +74,27 @@
 
 ---
 
-## 현황 요약 (2026-08-28 기준)
+## RFP 외 자체 개선 (요구사항 밖 — 근거·상세는 docs/decisions.md, 일자는 worklog.md)
 
-- SFR 17개: 완료 15 / 비목표 1(SFR-011 — Python만, Java/JS는 plan.md §5) / — SFR-010은 구조 충족
-- DAR 10개: 완료 9 / 비목표 1(DAR-008, 스냅샷으로 단순화)
+| 항목 | 내용 | 구현 위치 |
+|---|---|---|
+| 결과 열람 접근 로그 (9/1) | 결과 조회 3종 + diff·run-changes 열람을 INFO 기록, 성공 응답만 | config/access_log.py, logs/access.log |
+| 사용자 관리 개선 (9/1) | User.name 표시, 할당 프로젝트 목록(팝오버), 이력 계정 삭제 가드(PROTECT+409) | accounts, projects, frontend `UsersPage` |
+| Finding fingerprint (9/2) | 실행 간 매칭 키 — sha256(룰\|경로\|정규화 스니펫)+순번, 라인 밀림에 안정, 기존 데이터 백필 | catalog/fingerprint.py, 마이그레이션 0002·0003 |
+| 실행 간 diff API (9/2) | 신규/해결/유지 분류, base 자동 선택, 중복 보정 | catalog `GET /api/analysis-runs/{id}/diff/` |
+| 비교 페이지 (9/2) | 상태 칩·심각도·유형·검색 필터, 안내 3종 | frontend `ComparePage` |
+| 프로젝트 대시보드 (9/2) | 메트릭 카드 4종, 심각도 스택 추이(CSS), 비교 요약·룰 상위 위젯 | frontend `ProjectDashboard` |
+| 분석 이력화 (9/2) | 프로젝트 내 회차(sequence) 표시, 행별 직전 대비 변화량 | analysis(sequence), catalog `GET /api/projects/{id}/run-changes/` |
+
+## 현황 요약 (2026-09-02 기준)
+
+- SFR 17개: 완료 16 / 미구현 1(SFR-011 — 추가 언어(Java/JS), plan.md §5)
+- DAR 10개: 완료 10 (DAR-008은 9/2 판정 조정 — decisions.md)
 - SEC 10개: 완료 10 (SEC-006·009는 plan.md §5의 "기본 수준" 기준)
 - TST 8개: 완료 8
 - QLT 5개: 완료 5
-- 테스트: **211개 전부 통과** (accounts 51 + projects·analysis 64 + catalog 96 — 8/29
-  분석 대상 0개 실패 처리 2개 추가, 회귀 0건)
-- **프론트엔드(8/28)**: React SPA로 로그인→프로젝트→업로드→실행→결과(심각도 필터)→카탈로그 49개
-  전 화면 완결. 관리자·일반 계정 브라우저 E2E로 권한 격리까지 실증(위 SFR/SEC/TST 각 행의 8/28 표기)
-- **사용자 관리(8/28 저녁)**: /api/users/ 4개 엔드포인트(목록·생성·삭제·비활성화, 전부 관리자
-  전용) + `/users` 페이지 + ProjectDetailPage 멤버 할당·해제 섹션. 실서버 API E2E 20개 체크
-  전부 통과(잔여 데이터 0). 멤버 할당 UI 비목표는 해소(SFR-005 비고)
+- **합계: 50개 중 완료 49 / 미구현 1** (9/2 판정 조정으로 47→49, DAR-008·SFR-010 — decisions.md)
+- 테스트: **248개 전부 통과** (accounts 56 · projects 33 · analysis 38 · catalog 121)
+- 프론트엔드: 7화면 완결 — 로그인 / 프로젝트 목록 / 프로젝트 상세(대시보드 포함) /
+  실행 결과 상세 / 실행 비교 / 카탈로그 / 사용자 관리. 관리자·일반 계정 브라우저 E2E로
+  권한 격리 실증(각 행의 8/28 표기), diff 시연은 demo-app v1~v3로 실서버 검증(9/2)
