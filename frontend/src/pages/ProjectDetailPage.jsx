@@ -176,8 +176,9 @@ export default function ProjectDetailPage() {
             {uploading ? '업로드 중…' : 'zip 업로드'}
           </button>
           <span className="muted">
-            같은 프로젝트 소스의 수정 버전을 zip(50MB 이하)으로 업로드하세요. 실행하면
-            이전 실행과 비교해 신규·해결이 표시됩니다.
+            {runs?.some((r) => r.status === 'SUCCEEDED')
+              ? '수정한 소스를 zip으로 업로드하세요 (50MB 이하). 실행하면 이전 회차와 비교해 신규·해결 항목을 보여줍니다.'
+              : '분석할 소스를 zip으로 업로드하세요 (50MB 이하). 실행하면 취약점을 진단합니다.'}
           </span>
           {uploadError && <p className="form-error">{uploadError}</p>}
         </form>

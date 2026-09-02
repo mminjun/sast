@@ -132,9 +132,8 @@ export default function ComparePage() {
         !hintDismissed && (
           <p className="hint small">
             <span>
-              이전 실행과 공통(유지) 항목이 없습니다 — 다른 소스를 업로드하셨는지 확인해
-              보세요. 같은 프로젝트에는 같은 소스의 수정 버전을 올려야 비교가 의미를
-              가집니다.
+              이전 회차와 공통된 항목이 없습니다. 다른 소스를 올리신 게 아닌지 확인해
+              주세요.
             </span>
             <button type="button" className="btn-link" onClick={() => setHintDismissed(true)}>
               닫기
