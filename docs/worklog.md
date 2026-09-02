@@ -305,3 +305,28 @@
     확인 / 마이그레이션 2건 로컬 DB 적용
   - 커밋 ac32a05(①~③)·320a53d(④)·4380b08(⑤) — 각 커밋 단독 green 되게 분리 스테이징
   - 다음: 도그푸딩 #20 48건 트리아지, 시연 리허설(9/3 최종 발표)
+
+## 2026-09-02
+- 실행 간 비교(diff) 기능 완성 — feature/run-diff 5커밋, main 머지 (RFP 외 자체 개선)
+  - ⑥ run 응답 심각도별 건수(6f6b4d7, SFR-016 — 전날 커밋, 오늘 브랜치에 포함)
+  - ⑦ Finding.fingerprint(598a70c) — sha256(룰|경로|공백 정규화 스니펫) + run 내
+    start_line 순 ":N" 순번 항상 부여(라인 밀림에 안정). 규칙은 catalog/fingerprint.py
+    한 곳, ingest·백필 공유. AddField와 백필은 마이그레이션 분리 — 한 트랜잭션에 두면
+    PG가 "cannot CREATE INDEX ... pending trigger events"로 거부(테스트 DB는 빈
+    테이블이라 안 걸리고 실DB 132건에서 발견). 백필 검증: 전건 형식 일치·run 내 중복 0
+  - ⑧ diff API(aca89df) — GET /api/analysis-runs/{id}/diff/?base=. base 생략 시 직전
+    SUCCEEDED 자동 선택. 매칭은 기본 해시 그룹 내 위치 짝짓기(중복 보정), 빈
+    fingerprint는 제외 후 excluded로 표시. 타 프로젝트·미존재 base 동일 400(SEC-006),
+    접근 로그 run_diff. secure-review 통과
+  - ⑨ 비교 페이지(50f55ac) — /projects/:id/compare, 상태 칩 토글 + 심각도·분류·검색
+    필터(프론트), 안내 3종(base 자동/이전 실행 없음/제외 건수), 진입 링크 2곳
+  - ⑩ 프로젝트 대시보드(b81a37c) — 메트릭 카드 4개, 순수 CSS 심각도 스택 추이
+    (클릭 시 run 이동, 10/20/전체), 비교 요약 위젯, 룰별 상위 5(by_rule 재사용).
+    빈 상태 4종(실행 0/실패만/완료 1개/탐지 0건) 처리
+  - 시연 샘플 demo-app v1~v3 제작(dogfood/, 커밋 제외) — 로컬 semgrep 실측
+    14(H9)→12(H7)→9(H3)건, diff 예측 신규3/해결5/유지9·신규1/해결4/유지8이
+    실제 서버 화면과 일치 확인(사용자 검증). 라인 밀림 유지 판정도 실사례로 확인
+  - decisions.md 3건: 순번 항상 부여·기각 대안 3가지 / 마이그레이션의 fingerprint.py
+    직접 import 트레이드오프 / diff 중복 보정과 남는 한계
+  - 검증: 전체 테스트 221→240개 통과(머지 후 main에서 재확인) / 프론트 빌드 OK
+  - 다음: 시연 리허설(9/3 최종 발표), 도그푸딩 #20 트리아지 잔여
