@@ -187,6 +187,16 @@ select:focus {
   cursor: not-allowed;
 }
 
+/* 링크(a)에 .btn을 입힐 때 — 링크 기본 밑줄·파란색 대신 버튼 모양 유지 */
+a.btn {
+  display: inline-block;
+  text-decoration: none;
+}
+
+a.btn:hover {
+  text-decoration: none;
+}
+
 .btn-primary {
   background: var(--primary);
   border-color: var(--primary);

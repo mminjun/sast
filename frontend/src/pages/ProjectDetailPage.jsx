@@ -199,7 +199,6 @@ export default function ProjectDetailPage() {
               <th>결과</th>
               <th>변화</th>
               <th>업로드</th>
-              <th>완료</th>
               <th></th>
             </tr>
           </thead>
@@ -253,8 +252,9 @@ export default function ProjectDetailPage() {
                     <span className="muted">—</span>
                   )}
                 </td>
-                <td>{formatDateTime(run.created_at)}</td>
-                <td>{formatDateTime(run.finished_at)}</td>
+                {/* 완료 시각은 대부분 업로드와 같은 분이라 목록에선 생략 — 저장은
+                    그대로(DAR-005)이고 실행 상세에서 확인할 수 있다. */}
+                <td className="nowrap">{formatDateTime(run.created_at)}</td>
                 <td className="row-actions">
                   {isAdmin && (run.status === 'PENDING' || run.status === 'FAILED') && (
                     <button
@@ -267,10 +267,14 @@ export default function ProjectDetailPage() {
                     </button>
                   )}
                   {(run.status === 'SUCCEEDED' || run.status === 'FAILED') && (
-                    <Link to={`/runs/${run.id}`}>결과 보기</Link>
+                    <Link to={`/runs/${run.id}`} className="btn">
+                      결과 보기
+                    </Link>
                   )}
                   {run.status === 'SUCCEEDED' && (
-                    <Link to={`/projects/${id}/compare?target=${run.id}`}>이전 실행과 비교</Link>
+                    <Link to={`/projects/${id}/compare?target=${run.id}`} className="btn">
+                      비교
+                    </Link>
                   )}
                 </td>
               </tr>
