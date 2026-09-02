@@ -27,3 +27,7 @@ db.sqlite3-journal
 # 프론트엔드 (React/Vite)
 frontend/node_modules/
 frontend/dist/
+
+# 도그푸딩·시연 자료 — 소스(demo-app/)만 커밋하고 zip은 빌드 산출물이라 제외
+# (zip은 Compress-Archive로 소스에서 재생성)
+dogfood/*.zip
