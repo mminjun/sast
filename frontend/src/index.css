@@ -8,7 +8,11 @@
   --surface: #ffffff;
   --border: #dfe3e8;
   --text: #1f2933;
+  /* 중간 톤 — 본문보다 연하고 muted보다 진하다 (예: 메트릭 카드 라벨) */
+  --text-secondary: #4b5563;
   --muted: #6b7280;
+  /* muted보다 한 단계 옅음 — 보조 설명 중에서도 가장 낮은 위계(예: 카드 캡션) */
+  --muted-light: #9ca3af;
   --primary: #1d4ed8;
   --primary-dark: #1e40af;
   --danger: #b91c1c;
@@ -523,15 +527,16 @@ td.truncate {
   font-weight: 700;
 }
 
+/* 카드 위계: 숫자(--text, 굵게) > 라벨(--text-secondary) > 캡션(--muted-light) */
 .stat-label {
   font-size: 0.8rem;
-  color: var(--muted);
+  color: var(--text-secondary);
 }
 
 /* 메트릭 카드 3단(라벨/숫자/캡션)의 캡션 — 숫자가 무엇 기준인지 설명 */
 .stat-caption {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--muted-light);
 }
 
 /* 프로젝트 대시보드 (실행 추이·비교·룰 상위) */
