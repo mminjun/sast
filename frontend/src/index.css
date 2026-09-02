@@ -320,6 +320,22 @@ select:focus {
   color: #6d28d9;
 }
 
+/* 실행 비교(diff) 상태 */
+.diff-new {
+  background: #fee2e2;
+  color: var(--high);
+}
+
+.diff-resolved {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.diff-persisted {
+  background: #e5e7eb;
+  color: #374151;
+}
+
 .role-user {
   background: #e5e7eb;
   color: #374151;
@@ -348,6 +364,167 @@ select:focus {
 .stat-number {
   font-size: 1.4rem;
   font-weight: 700;
+}
+
+/* 프로젝트 대시보드 (실행 추이·비교·룰 상위) */
+.stat-up {
+  color: var(--high);
+}
+
+.stat-down {
+  color: #047857;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.trend-header {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  justify-content: space-between;
+}
+
+.trend-legend-high {
+  color: var(--high);
+  font-weight: 600;
+}
+
+.trend-legend-medium {
+  color: var(--medium);
+  font-weight: 600;
+}
+
+.trend-legend-low {
+  color: var(--low);
+  font-weight: 600;
+}
+
+.trend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  min-height: 150px;
+  margin-top: 0.8rem;
+  overflow-x: auto;
+}
+
+.trend-bar {
+  flex: 1;
+  min-width: 42px;
+  max-width: 120px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.trend-bar:hover {
+  text-decoration: none;
+  opacity: 0.85;
+}
+
+.trend-stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+}
+
+.trend-seg {
+  border-radius: 2px;
+  margin-top: 2px;
+}
+
+.trend-seg-high {
+  background: var(--high);
+}
+
+.trend-seg-medium {
+  background: var(--medium);
+}
+
+.trend-seg-low {
+  background: var(--low);
+}
+
+.trend-zero {
+  text-align: center;
+  color: var(--muted);
+}
+
+.trend-label {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 0.35rem;
+}
+
+.widget-list {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.widget-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.55rem;
+}
+
+.widget-list li:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.widget-row-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+
+.widget-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.widget-count {
+  float: right;
+  font-weight: 700;
+}
+
+.rule-bar-track {
+  display: block;
+  background: #eef0f3;
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.rule-bar {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.rule-bar-high {
+  background: var(--high);
+}
+
+.rule-bar-medium {
+  background: var(--medium);
+}
+
+.rule-bar-low {
+  background: var(--low);
 }
 
 /* 필터 */

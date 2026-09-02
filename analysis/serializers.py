@@ -1,5 +1,6 @@
 """분석 실행 직렬화 (SFR-007~009, SEC-008)."""
 
+from django.db.models import Count
 from rest_framework import serializers
 
 from projects.serializers import UserBriefSerializer
@@ -12,6 +13,7 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
     """분석 실행 상태·결과 조회 (SFR-015, SFR-016 전 단계)."""
 
     created_by = UserBriefSerializer(read_only=True)
+    severity_counts = serializers.SerializerMethodField()
 
     class Meta:
         model = AnalysisRun
@@ -23,11 +25,27 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
             'status',
             'raw_result',
             'error_message',
+            'severity_counts',
             'created_at',
             'started_at',
             'finished_at',
         )
         read_only_fields = fields
+
+    def get_severity_counts(self, run):
+        """심각도별 결과 건수 (SFR-016).
+
+        목록·상세 뷰는 annotate 값(_with_severity_counts)을 그대로 쓴다 — N+1 방지.
+        업로드·실행 직후처럼 annotate 없는 단건 직렬화만 여기서 집계한다(쿼리 1회).
+        """
+        if hasattr(run, 'num_high'):
+            return {'high': run.num_high, 'medium': run.num_medium, 'low': run.num_low}
+        counts = dict(run.findings.values_list('severity').annotate(n=Count('id')))
+        return {
+            'high': counts.get('HIGH', 0),
+            'medium': counts.get('MEDIUM', 0),
+            'low': counts.get('LOW', 0),
+        }
 
 
 class AnalysisRunUploadSerializer(serializers.Serializer):

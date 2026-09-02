@@ -18,12 +18,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminRole
-from analysis.models import AnalysisRun
+from analysis.models import AnalysisRun, AnalysisStatus
 from config.access_log import log_access
 
 from .models import DiagnosticRule, Finding, KisaCategory, Severity
 from .serializers import DiagnosticRuleSerializer, FindingSerializer
-from .services import ingest_findings
+from .services import diff_findings, ingest_findings
 
 CATEGORY_VALUES = set(KisaCategory.values)
 SEVERITY_VALUES = set(Severity.values)
@@ -296,6 +296,85 @@ class RunFindingSummaryView(RunFindingsMixin, APIView):
             'by_severity': by_severity,
             'by_rule': by_rule,
         })
+
+
+class RunDiffView(RunFindingsMixin, APIView):
+    """실행 간 비교 — 직전(또는 지정) 실행 대비 신규/해결/유지 (RFP 외 자체 개선).
+
+    읽기 전용이라 접근 권한은 다른 결과 조회와 동일하다(일반 사용자도 할당
+    프로젝트면 조회 가능). 계산 규칙은 catalog/services.py의 diff_findings 참고.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, run_id):
+        target = self.get_run()
+        if target.status != AnalysisStatus.SUCCEEDED:
+            raise ValidationError(
+                {'detail': ['완료(SUCCEEDED)된 실행만 비교할 수 있습니다.']}
+            )
+        base, auto_selected = self._resolve_base(request, target)
+
+        result = diff_findings(base, target)
+        log_access(request.user, 'run_diff', run_id=target.pk, project_id=target.project_id)
+
+        payload = {
+            'target': self._run_meta(target),
+            'base': self._run_meta(base) if base else None,
+            'base_auto_selected': auto_selected,
+            **result,
+        }
+        if base is None:
+            payload['note'] = '비교할 이전 완료 실행이 없어 전체를 신규로 표시합니다.'
+        return Response(payload)
+
+    def _resolve_base(self, request, target):
+        """비교 기준 실행. ?base= 명시가 없으면 같은 프로젝트의 직전 완료 실행."""
+        raw = (request.query_params.get('base') or '').strip()
+        if not raw:
+            previous = (
+                AnalysisRun.objects
+                .filter(project_id=target.project_id, status=AnalysisStatus.SUCCEEDED)
+                .exclude(pk=target.pk)
+                # "직전"은 생성 시각 기준, 동시각이면 pk로 — 자동 선택이 요청마다
+                # 다른 실행을 고르면 diff 결과가 재현되지 않는다.
+                .filter(
+                    Q(created_at__lt=target.created_at)
+                    | Q(created_at=target.created_at, pk__lt=target.pk)
+                )
+                .order_by('-created_at', '-pk')
+                .first()
+            )
+            return previous, True
+
+        if not raw.isdigit():
+            raise ValidationError({'base': ['실행 id(정수)여야 합니다.']})
+        base_id = int(raw)
+        if base_id == target.pk:
+            raise ValidationError({'base': ['대상 실행 자신과는 비교할 수 없습니다.']})
+        # target 프로젝트로 한정해 조회한다 — 다른 프로젝트의 실행과 존재하지 않는
+        # 실행이 같은 응답이 되어, base id를 바꿔 넣어도 실행의 존재 여부를 알아낼
+        # 수 없다 (SEC-006). target이 이미 스코프를 통과했으므로 같은 프로젝트의
+        # 실행은 전부 열람 권한 안이다.
+        base = AnalysisRun.objects.filter(
+            project_id=target.project_id, pk=base_id,
+        ).first()
+        if base is None:
+            raise ValidationError({'base': ['같은 프로젝트의 실행이어야 합니다.']})
+        if base.status != AnalysisStatus.SUCCEEDED:
+            raise ValidationError(
+                {'base': ['완료(SUCCEEDED)된 실행만 비교할 수 있습니다.']}
+            )
+        return base, False
+
+    @staticmethod
+    def _run_meta(run):
+        return {
+            'id': run.pk,
+            'status': run.status,
+            'original_filename': run.original_filename,
+            'created_at': run.created_at,
+        }
 
 
 class RunFindingReingestView(RunFindingsMixin, APIView):

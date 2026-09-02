@@ -8,14 +8,16 @@ analysis 앱은 Semgrep을 돌려 raw_result(원본 JSON)까지만 책임진다.
 """
 
 import re
-from collections import namedtuple
+from collections import Counter, namedtuple
 from pathlib import Path
 
 from django.db import transaction
+from django.db.models import F
 
 from analysis.models import AnalysisRun
 from analysis.services import source_dir
 
+from .fingerprint import assign_fingerprints
 from .models import DiagnosticRule, Finding, Severity
 
 # 코드 조각 저장 상한. Semgrep이 조각을 주지 않아 우리가 직접 파일에서 읽으므로
@@ -213,6 +215,9 @@ def ingest_findings(run):
             continue
         findings.append(finding)
 
+    # diff 매칭 키. run 단위·결정적 계산이라 재수집해도 같은 값이 나온다(멱등성 유지).
+    assign_fingerprints(findings)
+
     with transaction.atomic():
         # 같은 run의 표준화를 직렬화한다. 잠그지 않으면 거의 동시에 들어온 재표준화
         # 두 건에서 뒤 트랜잭션의 DELETE가 자기 스냅샷 이후 커밋된 행을 지우지 못해
@@ -224,3 +229,94 @@ def ingest_findings(run):
 
     unmapped = sum(1 for finding in findings if finding.rule_id is None)
     return IngestResult(created=len(findings), skipped=skipped, unmapped=unmapped)
+
+
+# --- 실행 간 비교 (diff — RFP 외 자체 개선, docs/decisions.md 2026-09-02) ---
+
+# diff 항목에 내려보내는 필드. 화면이 코드 조각까지 보고 싶으면 기존 findings
+# 목록을 쓰면 된다 — diff는 변화의 요약이라 가볍게 유지한다.
+# category는 rule 참조에서 온다(미매핑은 null) — 비교 화면의 분류 필터용.
+DIFF_ITEM_FIELDS = (
+    'rule_code', 'rule_name', 'severity', 'category', 'file_path', 'start_line',
+    'message',
+)
+# 신규가 가장 급하고, 유지는 이미 알던 것 — 화면 정렬 기준을 응답에서 고정한다.
+_DIFF_STATUS_RANK = {'new': 0, 'resolved': 1, 'persisted': 2}
+_DIFF_SEVERITY_RANK = {Severity.HIGH: 0, Severity.MEDIUM: 1, Severity.LOW: 2}
+
+
+def _diff_rows(run):
+    """diff 계산에 필요한 필드만 뽑는다. fingerprint가 빈 행은 매칭 대상에서 뺀다.
+
+    빈 값은 백필 이전 데이터나 예외 상황의 흔적이다 — 매칭에 넣으면 빈 값끼리
+    서로 짝지어지는 사고가 난다. 제외 건수는 응답의 excluded로 드러낸다.
+    """
+    included, excluded = [], 0
+    rows = Finding.objects.filter(run=run).values(
+        'rule_code', 'rule_name', 'severity', 'file_path', 'start_line',
+        'message', 'fingerprint', category=F('rule__category'),
+    ).order_by('start_line', 'id')
+    for row in rows:
+        if row['fingerprint']:
+            included.append(row)
+        else:
+            excluded += 1
+    return included, excluded
+
+
+def _grouped(rows):
+    """순번(:N)을 뗀 기본 해시로 묶는다. rows가 start_line 순이라 그룹 안도 그 순서다."""
+    groups = {}
+    for row in rows:
+        groups.setdefault(row['fingerprint'].rsplit(':', 1)[0], []).append(row)
+    return groups
+
+
+def _item(status_value, row):
+    item = {field: row[field] for field in DIFF_ITEM_FIELDS}
+    item['status'] = status_value
+    return item
+
+
+def diff_findings(base_run, target_run):
+    """두 실행의 결과를 신규(new)/해결(resolved)/유지(persisted)로 분류한다.
+
+    매칭은 fingerprint의 기본 해시 그룹 단위로, 양쪽을 각각 start_line 오름차순
+    정렬해 앞에서부터 순서대로 짝짓는다. 순번(:N)을 그대로 대조하지 않고 그룹
+    안에서 위치로 짝짓는 이유: 동일 코드 중복 중 앞쪽만 고쳐지면 남은 건의 순번이
+    당겨져(:2→:1) 순번 대조로는 유지/해결의 줄 위치가 뒤바뀌어 보인다. 순번 부여
+    (ingest) 방식은 그대로 두고 보정은 diff 계산에서만 한다. 알려진 한계: 동일
+    코드가 대량으로 자리를 옮기면 위치 짝짓기가 어긋날 수 있다 (decisions.md).
+
+    유지 항목은 target 쪽 데이터로 보고한다 — 화면에서 그 줄로 이동할 대상은
+    현재(target) 소스다. 해결 항목만 base 쪽 데이터다 (target에는 이미 없다).
+    base_run이 None이면(비교할 이전 실행 없음) 전부 신규다.
+    """
+    base_rows, base_excluded = _diff_rows(base_run) if base_run else ([], 0)
+    target_rows, target_excluded = _diff_rows(target_run)
+
+    base_groups = _grouped(base_rows)
+    target_groups = _grouped(target_rows)
+
+    items = []
+    for key in base_groups.keys() | target_groups.keys():
+        base_group = base_groups.get(key, [])
+        target_group = target_groups.get(key, [])
+        matched = min(len(base_group), len(target_group))
+        items.extend(_item('persisted', row) for row in target_group[:matched])
+        items.extend(_item('resolved', row) for row in base_group[matched:])
+        items.extend(_item('new', row) for row in target_group[matched:])
+
+    items.sort(key=lambda item: (
+        _DIFF_STATUS_RANK[item['status']],
+        _DIFF_SEVERITY_RANK.get(item['severity'], 3),
+        item['file_path'],
+        item['start_line'],
+    ))
+    counts = Counter(item['status'] for item in items)
+    return {
+        'summary': {status_value: counts.get(status_value, 0)
+                    for status_value in ('new', 'resolved', 'persisted')},
+        'excluded': {'base': base_excluded, 'target': target_excluded},
+        'items': items,
+    }

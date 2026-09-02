@@ -160,6 +160,11 @@ class Finding(models.Model):
 
     message = models.TextField('메시지', blank=True)
     code_snippet = models.TextField('코드 조각', blank=True)
+    # 실행 간 diff의 매칭 키. sha256(룰|경로|공백 정규화한 조각) + ":순번" — 라인
+    # 번호는 넣지 않고(줄 밀림에 안정), 같은 run 안 동일 해시는 start_line 순으로
+    # 순번을 항상 붙인다(1건뿐이어도 ":1"). 계산은 catalog/fingerprint.py 한 곳에만
+    # 두고 ingest와 마이그레이션 백필이 공유한다 (docs/decisions.md 2026-09-02).
+    fingerprint = models.CharField('핑거프린트', max_length=80, default='', db_index=True)
     # 룰 metadata에서 가져온 cwe·references 등 (DAR-009).
     extra = models.JSONField('부가정보', default=dict, blank=True)
 

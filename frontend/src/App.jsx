@@ -4,6 +4,7 @@ import RequireAdmin from './auth/RequireAdmin.jsx';
 import RequireAuth from './auth/RequireAuth.jsx';
 import Layout from './components/Layout.jsx';
 import CatalogPage from './pages/CatalogPage.jsx';
+import ComparePage from './pages/ComparePage.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import ProjectDetailPage from './pages/ProjectDetailPage.jsx';
 import ProjectListPage from './pages/ProjectListPage.jsx';
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/projects" replace />} />
         <Route path="/projects" element={<ProjectListPage />} />
         <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        <Route path="/projects/:projectId/compare" element={<ComparePage />} />
         <Route path="/runs/:id" element={<RunDetailPage />} />
         <Route path="/catalog" element={<CatalogPage />} />
         <Route

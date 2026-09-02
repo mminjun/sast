@@ -6,6 +6,7 @@ project_id·run id는 항상 스코프된 쿼리셋을 거쳐 조회하므로, U
 """
 
 from django.conf import settings
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -30,6 +31,20 @@ def _scoped_projects(user):
     if user.is_admin:
         return Project.objects.all()
     return Project.objects.filter(memberships__user=user)
+
+
+def _with_severity_counts(queryset):
+    """실행별 심각도 건수를 목록 쿼리 한 번에 계산한다 (SFR-016, N+1 방지).
+
+    Finding은 catalog 앱 소유지만 여기서는 역참조 이름(findings)과 severity 값
+    문자열만 쓰고 모듈은 import하지 않는다 — 확장자 목록을 룰 YAML에서 파생하지
+    않은 것과 같은 이유로 analysis→catalog 역방향 의존을 만들지 않는다 (QLT-001).
+    """
+    return queryset.annotate(
+        num_high=Count('findings', filter=Q(findings__severity='HIGH')),
+        num_medium=Count('findings', filter=Q(findings__severity='MEDIUM')),
+        num_low=Count('findings', filter=Q(findings__severity='LOW')),
+    )
 
 
 def _scoped_analysis_runs(user):
@@ -57,7 +72,7 @@ class ProjectAnalysisRunsView(APIView):
 
     def get(self, request, project_id):
         project = self.get_project()
-        runs = project.analysis_runs.select_related('created_by')
+        runs = _with_severity_counts(project.analysis_runs.select_related('created_by'))
         return Response(AnalysisRunSerializer(runs, many=True).data)
 
     def post(self, request, project_id):
@@ -82,7 +97,7 @@ class AnalysisRunDetailView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return _scoped_analysis_runs(self.request.user)
+        return _with_severity_counts(_scoped_analysis_runs(self.request.user))
 
     def retrieve(self, request, *args, **kwargs):
         run = self.get_object()

@@ -89,6 +89,11 @@ export default function RunDetailPage() {
         {run.created_by && <> · 실행자 {formatUser(run.created_by)}</>}
         {' '}· 업로드 {new Date(run.created_at).toLocaleString('ko-KR')}
         {run.finished_at && <> · 완료 {new Date(run.finished_at).toLocaleString('ko-KR')}</>}
+        {run.status === 'SUCCEEDED' && (
+          <>
+            {' '}· <Link to={`/projects/${run.project}/compare?target=${run.id}`}>이전 실행과 비교</Link>
+          </>
+        )}
       </p>
 
       {error && <p className="form-error">{error}</p>}
