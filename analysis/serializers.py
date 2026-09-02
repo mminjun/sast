@@ -6,7 +6,7 @@ from rest_framework import serializers
 from projects.serializers import UserBriefSerializer
 
 from .models import AnalysisRun
-from .services import ZipValidationError, extract_zip_safely
+from .services import ZipValidationError, extract_zip_safely, run_sequence
 
 
 class AnalysisRunSerializer(serializers.ModelSerializer):
@@ -14,11 +14,13 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
 
     created_by = UserBriefSerializer(read_only=True)
     severity_counts = serializers.SerializerMethodField()
+    sequence = serializers.SerializerMethodField()
 
     class Meta:
         model = AnalysisRun
         fields = (
             'id',
+            'sequence',
             'project',
             'created_by',
             'original_filename',
@@ -46,6 +48,16 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
             'medium': counts.get('MEDIUM', 0),
             'low': counts.get('LOW', 0),
         }
+
+    def get_sequence(self, run):
+        """프로젝트 내 회차 — 화면 표시용 ("N번째 분석"), 식별자는 여전히 id.
+
+        목록 뷰는 전체를 들고 있어 자리에서 붙여 준 값(sequence_no)을 쓰고
+        (쿼리 0회), 상세·업로드 직후 같은 단건 직렬화만 여기서 계산한다(쿼리 1회).
+        severity_counts와 같은 폴백 구조다.
+        """
+        cached = getattr(run, 'sequence_no', None)
+        return cached if cached is not None else run_sequence(run)
 
 
 class AnalysisRunUploadSerializer(serializers.Serializer):

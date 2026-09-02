@@ -13,10 +13,24 @@ import zipfile
 from pathlib import Path
 
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import AnalysisRun, AnalysisStatus
 from .signals import run_succeeded
+
+
+def run_sequence(run):
+    """프로젝트 안에서 이 실행이 몇 번째인지 — 생성 순서 기준, 1부터.
+
+    화면은 DB 전체 id 대신 이 회차를 보여준다("이 프로젝트의 N번째 분석").
+    URL·API 식별자는 그대로 id다. 목록처럼 전체를 이미 들고 있는 곳은
+    쿼리 없이 자리에서 계산하고(analysis/views.py), 단건 응답만 이 함수를 쓴다.
+    """
+    return AnalysisRun.objects.filter(project_id=run.project_id).filter(
+        Q(created_at__lt=run.created_at)
+        | Q(created_at=run.created_at, pk__lte=run.pk)
+    ).count()
 
 
 class ZipValidationError(Exception):

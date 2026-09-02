@@ -63,7 +63,9 @@ class AnalysisRun(models.Model):
 
     class Meta:
         db_table = 'analysis_run'
-        ordering = ('-created_at',)
+        # 같은 분(초)에 생성된 실행들이 요청마다 순서가 뒤섞이지 않게 pk까지
+        # 묶어 결정적으로 정렬한다 — 최신이 위.
+        ordering = ('-created_at', '-id')
         verbose_name = '분석 실행'
         verbose_name_plural = '분석 실행'
 

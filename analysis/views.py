@@ -72,7 +72,17 @@ class ProjectAnalysisRunsView(APIView):
 
     def get(self, request, project_id):
         project = self.get_project()
-        runs = _with_severity_counts(project.analysis_runs.select_related('created_by'))
+        # annotate(집계)가 붙으면 Django가 Meta 기본 정렬을 제거한다 — 같은 분에
+        # 생성된 실행들이 요청마다 뒤섞이던 원인. 명시적으로 다시 고정한다.
+        runs = list(
+            _with_severity_counts(project.analysis_runs.select_related('created_by'))
+            .order_by('-created_at', '-pk')
+        )
+        # 회차는 목록 전체를 이미 들고 있으므로 자리에서 계산한다(쿼리 0회).
+        # 목록은 (-created_at, -id) 정렬이라 아래(가장 오래된 실행)가 1회차다.
+        total = len(runs)
+        for index, run in enumerate(runs):
+            run.sequence_no = total - index
         return Response(AnalysisRunSerializer(runs, many=True).data)
 
     def post(self, request, project_id):

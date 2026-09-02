@@ -525,3 +525,46 @@ class AccessLogTests(AnalysisTestCase):
         with self.assertNoLogs('access', level='INFO'):
             res = self.client.get(detail_url(run.pk))
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class RunOrderingAndSequenceTests(AnalysisTestCase):
+    """목록 정렬의 결정성과 프로젝트 내 회차 표시 (RFP 외 자체 개선)."""
+
+    def _make_run(self, project):
+        return AnalysisRun.objects.create(
+            project=project, created_by=self.admin, original_filename='src.zip',
+        )
+
+    def test_list_is_ordered_newest_first_with_id_tiebreak(self):
+        """같은 시각에 생성돼도 요청마다 순서가 바뀌지 않는다 — (-created_at, -id)."""
+        first = self._make_run(self.project_a)
+        second = self._make_run(self.project_a)
+        third = self._make_run(self.project_a)
+        # 같은 분(초)에 생성된 상황을 재현 — created_at을 동일 값으로 맞춘다.
+        AnalysisRun.objects.filter(project=self.project_a).update(
+            created_at=first.created_at,
+        )
+
+        self.login(self.admin)
+        ids = [row['id'] for row in self.client.get(list_url(self.project_a.pk)).data]
+        self.assertEqual(ids, [third.pk, second.pk, first.pk])
+
+    def test_sequence_is_per_project_creation_order(self):
+        """회차는 DB 전체 id가 아니라 프로젝트 안에서의 생성 순번이다."""
+        self._make_run(self.project_b)  # 다른 프로젝트 실행이 회차에 끼어들면 안 된다
+        first = self._make_run(self.project_a)
+        second = self._make_run(self.project_a)
+
+        self.login(self.admin)
+        rows = self.client.get(list_url(self.project_a.pk)).data
+        sequences = {row['id']: row['sequence'] for row in rows}
+        self.assertEqual(sequences, {first.pk: 1, second.pk: 2})
+
+    def test_detail_reports_same_sequence_as_list(self):
+        """목록(자리 계산)과 단건(쿼리 폴백)의 회차가 갈라지면 안 된다."""
+        self._make_run(self.project_a)
+        second = self._make_run(self.project_a)
+
+        self.login(self.admin)
+        detail = self.client.get(detail_url(second.pk)).data
+        self.assertEqual(detail['sequence'], 2)
