@@ -6,6 +6,7 @@ from .views import (
     CatalogSummaryView,
     DiagnosticRuleDetailView,
     DiagnosticRuleListView,
+    ProjectRunChangesView,
     RunDiffView,
     RunFindingListView,
     RunFindingReingestView,
@@ -31,4 +32,8 @@ urlpatterns = [
     # 실행 간 비교 — findings와 같은 이유로 자원은 catalog 책임이다.
     path('analysis-runs/<int:run_id>/diff/',
          RunDiffView.as_view(), name='run-diff'),
+    # 실행 이력의 직전 대비 변화량 — analysis 목록 API를 확장하지 않는 이유는
+    # catalog/views.py ProjectRunChangesView 참고.
+    path('projects/<int:project_id>/run-changes/',
+         ProjectRunChangesView.as_view(), name='project-run-changes'),
 ]

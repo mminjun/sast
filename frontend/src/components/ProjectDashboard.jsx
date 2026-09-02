@@ -68,7 +68,7 @@ export default function ProjectDashboard({ projectId, runs }) {
       <div className="stat-row">
         <div className="stat">
           <span className="stat-number">{total(counts)}</span>
-          <span className="stat-label muted">최근 실행 탐지 (#{latest.id})</span>
+          <span className="stat-label muted">최근 실행 탐지 (#{latest.sequence ?? latest.id})</span>
         </div>
         <div className="stat">
           <span className={`stat-number ${hasBase && diff.summary.new > 0 ? 'stat-up' : ''}`}>
@@ -116,7 +116,7 @@ export default function ProjectDashboard({ projectId, runs }) {
                 key={run.id}
                 to={`/runs/${run.id}`}
                 className="trend-bar"
-                title={`#${run.id} — 높음 ${runCounts.high} · 보통 ${runCounts.medium} · 낮음 ${runCounts.low}`}
+                title={`#${run.sequence ?? run.id} — 높음 ${runCounts.high} · 보통 ${runCounts.medium} · 낮음 ${runCounts.low}`}
               >
                 <span className="trend-stack">
                   {total(runCounts) === 0 && <span className="trend-zero small">0</span>}
@@ -132,7 +132,7 @@ export default function ProjectDashboard({ projectId, runs }) {
                     );
                   })}
                 </span>
-                <span className="trend-label">#{run.id}</span>
+                <span className="trend-label">#{run.sequence ?? run.id}</span>
               </Link>
             );
           })}
@@ -143,7 +143,7 @@ export default function ProjectDashboard({ projectId, runs }) {
         <div className="card">
           <div className="trend-header">
             <strong>
-              실행 비교 {hasBase ? `#${diff.base.id} → #${latest.id}` : ''}
+              실행 비교 {hasBase ? `#${diff.base.sequence} → #${diff.target.sequence}` : ''}
             </strong>
             <Link to={`/projects/${projectId}/compare?target=${latest.id}`}>전체 보기</Link>
           </div>

@@ -109,6 +109,10 @@ def diff_url(run_id):
     return reverse('catalog:run-diff', args=[run_id])
 
 
+def run_changes_url(project_id):
+    return reverse('catalog:project-run-changes', args=[project_id])
+
+
 def semgrep_result(path, kisa_code, line=1, severity='ERROR', check_id=None, message='m'):
     """Semgrep --json 결과 1건의 형태. check_id의 config 경로 접두사까지 재현한다."""
     return {
@@ -1298,6 +1302,9 @@ class RunDiffTests(CatalogApiTestCase):
         self.assertEqual(response.data['summary'],
                          {'new': 1, 'resolved': 1, 'persisted': 1})
         self.assertEqual(response.data['base']['id'], self.base_run.pk)
+        # 화면 표시는 프로젝트 내 회차 — base가 1번째, target이 2번째 실행이다.
+        self.assertEqual(response.data['base']['sequence'], 1)
+        self.assertEqual(response.data['target']['sequence'], 2)
         self.assertFalse(response.data['base_auto_selected'])
 
         by_status = {item['status']: item for item in response.data['items']}
@@ -1403,4 +1410,62 @@ class RunDiffTests(CatalogApiTestCase):
         joined = '\n'.join(captured.output)
         self.assertIn('action=run_diff', joined)
         self.assertIn(f'run={self.target_run.pk}', joined)
+        self.assertIn(f'project={self.project.pk}', joined)
+
+
+class RunChangesTests(CatalogApiTestCase):
+    """실행 이력의 직전 완료 대비 변화량 API (RFP 외 자체 개선).
+
+    실행마다 diff를 호출하지 않고 프로젝트 단위 한 번에 — 실행 목록의
+    "수정본이 쌓이는 이력" 표시용.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.second_run = self.make_run(self.project, self.admin)
+        self.login(self.member)
+
+    def test_counts_new_and_resolved_per_run(self):
+        self.add_finding(run=self.run, file_path='app/a.py', fingerprint='fpA:1')
+        self.add_finding(run=self.run, file_path='app/b.py', fingerprint='fpB:1')
+        self.add_finding(run=self.second_run, file_path='app/b.py', fingerprint='fpB:1')
+        self.add_finding(run=self.second_run, file_path='app/c.py', fingerprint='fpC:1')
+
+        response = self.client.get(run_changes_url(self.project.pk))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # 첫 완료 실행은 비교 대상이 없어 키 자체가 없다 — 화면은 '—'.
+        self.assertEqual(
+            response.data['changes'],
+            {self.second_run.pk: {'new': 1, 'resolved': 1}},
+        )
+
+    def test_failed_runs_and_empty_fingerprints_are_excluded(self):
+        failed = self.make_run(self.project, self.admin,
+                               status_value=AnalysisStatus.FAILED)
+        self.add_finding(run=self.run)         # fingerprint '' — 계산 제외
+        self.add_finding(run=self.second_run)  # fingerprint '' — 계산 제외
+
+        response = self.client.get(run_changes_url(self.project.pk))
+        self.assertNotIn(failed.pk, response.data['changes'])
+        self.assertEqual(
+            response.data['changes'],
+            {self.second_run.pk: {'new': 0, 'resolved': 0}},
+        )
+
+    def test_scope_hides_unassigned_project(self):
+        """미할당·미존재 프로젝트는 동일한 404 (SEC-006)."""
+        self.assertEqual(
+            self.client.get(run_changes_url(self.other_project.pk)).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.get(run_changes_url(self.other_project.pk + 1000)).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_read_is_logged(self):
+        with self.assertLogs('access', level='INFO') as captured:
+            self.client.get(run_changes_url(self.project.pk))
+        joined = '\n'.join(captured.output)
+        self.assertIn('action=run_changes', joined)
         self.assertIn(f'project={self.project.pk}', joined)

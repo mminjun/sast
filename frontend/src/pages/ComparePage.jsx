@@ -97,23 +97,23 @@ export default function ComparePage() {
         <Link to={`/projects/${projectId}`}>{project?.name || `#${projectId}`}</Link> / 실행 비교
       </p>
       <h1>
-        실행 비교 {diff.base ? `#${diff.base.id}` : '—'} → #{diff.target.id}
+        실행 비교 {diff.base ? `#${diff.base.sequence}` : '—'} → #{diff.target.sequence}
       </h1>
       <p className="muted">
         {project?.name}
         {diff.base && (
           <>
-            {' '}· 기준 <Link to={`/runs/${diff.base.id}`}>#{diff.base.id}</Link> (
+            {' '}· 기준 <Link to={`/runs/${diff.base.id}`}>#{diff.base.sequence}</Link> (
             {formatDateTime(diff.base.created_at)})
           </>
         )}
-        {' '}· 대상 <Link to={`/runs/${diff.target.id}`}>#{diff.target.id}</Link> (
+        {' '}· 대상 <Link to={`/runs/${diff.target.id}`}>#{diff.target.sequence}</Link> (
         {formatDateTime(diff.target.created_at)})
       </p>
 
       {diff.note && <p className="muted">{diff.note}</p>}
       {diff.base && diff.base_auto_selected && (
-        <p className="muted small">기준 실행 미지정 — 직전 완료 실행 #{diff.base.id}과 자동 비교합니다.</p>
+        <p className="muted small">기준 실행 미지정 — 직전 완료 실행 #{diff.base.sequence}과 자동 비교합니다.</p>
       )}
       {excludedTotal > 0 && (
         <p className="muted small">

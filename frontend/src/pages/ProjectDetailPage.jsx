@@ -13,6 +13,8 @@ export default function ProjectDetailPage() {
   const { isAdmin } = useAuth();
   const [project, setProject] = useState(null);
   const [runs, setRuns] = useState(null);
+  // 실행별 직전 완료 대비 변화량 {run_id: {new, resolved}} — 이력으로 읽히게 하는 표시.
+  const [runChanges, setRunChanges] = useState({});
   const [error, setError] = useState('');
   const [uploadError, setUploadError] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -31,8 +33,16 @@ export default function ProjectDetailPage() {
   const [addingMember, setAddingMember] = useState(false);
   const [removingId, setRemovingId] = useState(null);
 
+  const loadRunChanges = () => {
+    // 부가 표시라 실패해도 목록은 그대로 보여준다.
+    api(`/api/projects/${id}/run-changes/`)
+      .then((data) => setRunChanges(data.changes || {}))
+      .catch(() => {});
+  };
+
   useEffect(() => {
     setError('');
+    loadRunChanges();
     Promise.all([api(`/api/projects/${id}/`), api(`/api/projects/${id}/analysis-runs/`)])
       .then(([p, r]) => {
         setProject(p);
@@ -119,6 +129,7 @@ export default function ProjectDetailPage() {
     try {
       const updated = await api(`/api/analysis-runs/${runId}/execute/`, { method: 'POST' });
       setRuns((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+      loadRunChanges(); // 새 완료 실행이 생겼으니 변화량도 갱신
     } catch (err) {
       setExecuteError(err instanceof ApiError ? err.detail : '실행 요청에 실패했습니다.');
     } finally {
@@ -140,7 +151,7 @@ export default function ProjectDetailPage() {
       {/* 실행 0개는 아래 실행 목록의 빈 안내로 충분 — 대시보드는 실행이 있을 때만. */}
       {runs?.length > 0 && <ProjectDashboard projectId={id} runs={runs} />}
 
-      <h2>분석 실행</h2>
+      <h2>분석 이력</h2>
       {isAdmin && (
         <form className="card form-inline" onSubmit={handleUpload}>
           <label className="btn file-pick">
@@ -170,16 +181,19 @@ export default function ProjectDetailPage() {
       )}
 
       {executeError && <p className="form-error">{executeError}</p>}
-      {runs?.length === 0 && <p className="muted">분석 실행이 없습니다.</p>}
+      {runs?.length === 0 && (
+        <p className="muted">아직 분석 이력이 없습니다. zip을 업로드해 첫 분석을 시작하세요.</p>
+      )}
 
       {runs?.length > 0 && (
         <table className="table">
           <thead>
             <tr>
-              <th>#</th>
+              <th>회차</th>
               <th>파일</th>
               <th>상태</th>
               <th>결과</th>
+              <th>변화</th>
               <th>업로드</th>
               <th>완료</th>
               <th></th>
@@ -189,7 +203,8 @@ export default function ProjectDetailPage() {
             {runs.map((run) => (
               <tr key={run.id}>
                 <td>
-                  <Link to={`/runs/${run.id}`}>{run.id}</Link>
+                  {/* 표시는 프로젝트 내 회차, 링크는 여전히 전역 id */}
+                  <Link to={`/runs/${run.id}`}>#{run.sequence ?? run.id}</Link>
                 </td>
                 <td className="truncate" title={run.original_filename}>
                   {run.original_filename}
@@ -214,6 +229,20 @@ export default function ProjectDetailPage() {
                         )
                       )}
                     </span>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
+                <td className="nowrap small">
+                  {runChanges[run.id] ? (
+                    <>
+                      <span className={runChanges[run.id].new > 0 ? 'stat-up' : 'muted'}>
+                        +{runChanges[run.id].new}
+                      </span>{' '}
+                      <span className={runChanges[run.id].resolved > 0 ? 'stat-down' : 'muted'}>
+                        −{runChanges[run.id].resolved}
+                      </span>
+                    </>
                   ) : (
                     <span className="muted">—</span>
                   )}

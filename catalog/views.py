@@ -19,11 +19,14 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminRole
 from analysis.models import AnalysisRun, AnalysisStatus
+from analysis.services import run_sequence
 from config.access_log import log_access
+
+from projects.models import Project
 
 from .models import DiagnosticRule, Finding, KisaCategory, Severity
 from .serializers import DiagnosticRuleSerializer, FindingSerializer
-from .services import diff_findings, ingest_findings
+from .services import diff_findings, ingest_findings, run_change_counts
 
 CATEGORY_VALUES = set(KisaCategory.values)
 SEVERITY_VALUES = set(Severity.values)
@@ -36,6 +39,16 @@ SEVERITY_RANK = Case(
     default=Value(2),
     output_field=IntegerField(),
 )
+
+
+def _scoped_projects(user):
+    """analysis/views.py의 같은 이름 함수와 동일한 규칙 (SEC-005).
+
+    각 앱이 자기 책임 안에서 권한을 확인한다 — 뷰 계층을 공유하지 않는다 (QLT-001).
+    """
+    if user.is_admin:
+        return Project.objects.all()
+    return Project.objects.filter(memberships__user=user)
 
 
 def _scoped_analysis_runs(user):
@@ -371,10 +384,30 @@ class RunDiffView(RunFindingsMixin, APIView):
     def _run_meta(run):
         return {
             'id': run.pk,
+            # 화면 표시는 프로젝트 내 회차("N번째 분석") — 식별자는 여전히 id.
+            'sequence': run_sequence(run),
             'status': run.status,
             'original_filename': run.original_filename,
             'created_at': run.created_at,
         }
+
+
+class ProjectRunChangesView(APIView):
+    """실행 이력의 직전 완료 대비 변화량 — 실행 목록 표시용 (RFP 외 자체 개선).
+
+    실행마다 diff API를 호출하면 목록 렌더링에 N개의 요청이 필요해진다.
+    diff는 catalog 책임이므로 analysis의 목록 API를 확장하는 대신(역방향 의존
+    금지, QLT-001) 여기서 프로젝트 단위로 한 번에 내려준다.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        # 미할당·미존재 프로젝트는 동일한 404 (SEC-006).
+        project = get_object_or_404(_scoped_projects(request.user), pk=project_id)
+        changes = run_change_counts(project.pk)
+        log_access(request.user, 'run_changes', project_id=project.pk)
+        return Response({'changes': changes})
 
 
 class RunFindingReingestView(RunFindingsMixin, APIView):

@@ -14,7 +14,7 @@ from pathlib import Path
 from django.db import transaction
 from django.db.models import F
 
-from analysis.models import AnalysisRun
+from analysis.models import AnalysisRun, AnalysisStatus
 from analysis.services import source_dir
 
 from .fingerprint import assign_fingerprints
@@ -320,3 +320,47 @@ def diff_findings(base_run, target_run):
         'excluded': {'base': base_excluded, 'target': target_excluded},
         'items': items,
     }
+
+
+def run_change_counts(project_id):
+    """프로젝트의 완료 실행마다 직전 완료 실행 대비 신규/해결 건수.
+
+    실행 목록이 "수정본이 쌓이는 이력"으로 읽히도록 행마다 변화량을 보여주기
+    위한 것 — 실행마다 diff API를 호출하는 대신 프로젝트 단위로 한 번에 계산한다.
+    매칭 규칙은 diff_findings와 동일(기본 해시 그룹, 빈 fingerprint 제외)이며,
+    건수만 필요하므로 그룹별 개수 차이로 충분하다 — 그룹 안 위치 짝짓기는
+    유지/신규/해결의 '어느 줄인가'를 바꿀 뿐 개수는 바꾸지 않는다.
+
+    반환: {run_id: {'new': n, 'resolved': n}} — 직전 완료 실행이 없는 첫 실행과
+    미완료 실행은 키 자체가 없다(화면은 '—'로 표시).
+    """
+    run_ids = list(
+        AnalysisRun.objects
+        .filter(project_id=project_id, status=AnalysisStatus.SUCCEEDED)
+        .order_by('created_at', 'id')
+        .values_list('id', flat=True)
+    )
+    counters = {run_id: Counter() for run_id in run_ids}
+    rows = (
+        Finding.objects.filter(run_id__in=run_ids)
+        .exclude(fingerprint='')
+        .values_list('run_id', 'fingerprint')
+    )
+    for run_id, fingerprint in rows:
+        counters[run_id][fingerprint.rsplit(':', 1)[0]] += 1
+
+    changes = {}
+    previous = None
+    for run_id in run_ids:
+        if previous is not None:
+            current, before = counters[run_id], counters[previous]
+            changes[run_id] = {
+                'new': sum(
+                    max(0, count - before.get(key, 0)) for key, count in current.items()
+                ),
+                'resolved': sum(
+                    max(0, count - current.get(key, 0)) for key, count in before.items()
+                ),
+            }
+        previous = run_id
+    return changes
