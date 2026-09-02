@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
+import ProjectDashboard from '../components/ProjectDashboard.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { formatUser } from '../utils/format.js';
 
@@ -131,6 +132,9 @@ export default function ProjectDetailPage() {
       </p>
       <h1>{project.name}</h1>
       {project.description && <p className="muted">{project.description}</p>}
+
+      {/* 실행 0개는 아래 실행 목록의 빈 안내로 충분 — 대시보드는 실행이 있을 때만. */}
+      {runs?.length > 0 && <ProjectDashboard projectId={id} runs={runs} />}
 
       <h2>분석 실행</h2>
       {isAdmin && (
