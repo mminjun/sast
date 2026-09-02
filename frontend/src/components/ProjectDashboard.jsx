@@ -93,11 +93,6 @@ export default function ProjectDashboard({ projectId, runs }) {
             {!diff ? ' ' : hasBase ? `#${diff.base.sequence} 대비` : '이전 회차 없음'}
           </span>
         </div>
-        <div className="stat">
-          <span className="stat-label">남은 높음</span>
-          <span className="stat-number">{counts.high}</span>
-          <span className="stat-caption">최신 회차 기준</span>
-        </div>
       </div>
       {diffFailed && <p className="muted small">비교 정보를 불러오지 못했습니다.</p>}
 
