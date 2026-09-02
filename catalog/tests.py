@@ -105,6 +105,10 @@ def reingest_url(run_id):
     return reverse('catalog:run-finding-reingest', args=[run_id])
 
 
+def diff_url(run_id):
+    return reverse('catalog:run-diff', args=[run_id])
+
+
 def semgrep_result(path, kisa_code, line=1, severity='ERROR', check_id=None, message='m'):
     """Semgrep --json 결과 1건의 형태. check_id의 config 경로 접두사까지 재현한다."""
     return {
@@ -1264,3 +1268,137 @@ class AccessLogTests(CatalogApiTestCase):
             self.client.get(findings_url(self.run.pk))
             self.login(self.member)
             self.client.get(findings_url(self.run.pk), {'severity': 'XX'})
+
+
+class RunDiffTests(CatalogApiTestCase):
+    """실행 간 비교 (RFP 외 자체 개선, docs/decisions.md 2026-09-02).
+
+    매칭 로직 단위 검증은 손으로 만든 fingerprint로, 순번 보정은 실제 ingest를
+    거친 end-to-end로 확인한다.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.base_run = self.run                      # SUCCEEDED (setUp 기본값)
+        self.target_run = self.make_run(self.project, self.admin)
+        self.login(self.member)
+
+    def diff(self, run=None, **params):
+        return self.client.get(diff_url((run or self.target_run).pk), params)
+
+    def test_new_resolved_persisted_and_summary(self):
+        self.add_finding(run=self.base_run, file_path='app/a.py', fingerprint='fpA:1')
+        self.add_finding(run=self.base_run, file_path='app/b.py', fingerprint='fpB:1')
+        self.add_finding(run=self.target_run, file_path='app/b.py', start_line=5,
+                         fingerprint='fpB:1')
+        self.add_finding(run=self.target_run, file_path='app/c.py', fingerprint='fpC:1')
+
+        response = self.diff(base=self.base_run.pk)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['summary'],
+                         {'new': 1, 'resolved': 1, 'persisted': 1})
+        self.assertEqual(response.data['base']['id'], self.base_run.pk)
+        self.assertFalse(response.data['base_auto_selected'])
+
+        by_status = {item['status']: item for item in response.data['items']}
+        self.assertEqual(by_status['new']['file_path'], 'app/c.py')
+        self.assertEqual(by_status['resolved']['file_path'], 'app/a.py')
+        # 유지는 target 쪽 데이터다 — 화면에서 이동할 대상은 현재 소스의 줄이다.
+        self.assertEqual(by_status['persisted']['file_path'], 'app/b.py')
+        self.assertEqual(by_status['persisted']['start_line'], 5)
+        # 신규가 가장 급하다 — 정렬을 응답에서 고정한다.
+        self.assertEqual([item['status'] for item in response.data['items']],
+                         ['new', 'resolved', 'persisted'])
+
+    def test_front_duplicate_removed_keeps_later_line(self):
+        """동일 코드 2건 중 앞쪽만 고치면 유지는 뒤쪽 라인으로 보고돼야 한다."""
+        source = self.write_source(self.base_run, 'app/dup.py', 'q = 1\nq = 1\n')
+        self.base_run.raw_result = {'results': [
+            semgrep_result(source, 'KISA-IV-01', line=1),
+            semgrep_result(source, 'KISA-IV-01', line=2),
+        ]}
+        self.base_run.save(update_fields=['raw_result'])
+        ingest_findings(self.base_run)
+
+        fixed = self.write_source(self.target_run, 'app/dup.py', '# fixed\nq = 1\n')
+        self.target_run.raw_result = {'results': [
+            semgrep_result(fixed, 'KISA-IV-01', line=2),
+        ]}
+        self.target_run.save(update_fields=['raw_result'])
+        ingest_findings(self.target_run)
+
+        response = self.diff(base=self.base_run.pk)
+        self.assertEqual(response.data['summary'],
+                         {'new': 0, 'resolved': 1, 'persisted': 1})
+        by_status = {item['status']: item for item in response.data['items']}
+        self.assertEqual(by_status['persisted']['start_line'], 2)
+
+    def test_base_from_other_project_and_missing_look_identical(self):
+        """다른 프로젝트의 실행과 없는 실행이 같은 400 — 존재 여부 미노출 (SEC-006)."""
+        other = self.diff(base=self.other_run.pk)
+        missing = self.diff(base=self.missing_run_id)
+        self.assertEqual(other.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(missing.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(other.data, missing.data)
+
+    def test_rejects_invalid_base_values(self):
+        self.assertEqual(self.diff(base='abc').status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.diff(base=self.target_run.pk).status_code,
+                         status.HTTP_400_BAD_REQUEST)
+
+    def test_rejects_runs_that_are_not_succeeded(self):
+        failed = self.make_run(self.project, self.admin,
+                               status_value=AnalysisStatus.FAILED)
+        self.assertEqual(self.diff(run=failed).status_code,
+                         status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.diff(base=failed.pk).status_code,
+                         status.HTTP_400_BAD_REQUEST)
+
+    def test_base_defaults_to_previous_succeeded_run(self):
+        """실패한 실행과 target 이후의 실행은 자동 선택에서 빠진다."""
+        self.make_run(self.project, self.admin, status_value=AnalysisStatus.FAILED)
+        self.make_run(self.project, self.admin)  # target보다 뒤 — 선택되면 안 된다
+
+        response = self.diff()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['base']['id'], self.base_run.pk)
+        self.assertTrue(response.data['base_auto_selected'])
+
+    def test_no_previous_run_reports_all_new(self):
+        self.login(self.admin)
+        self.add_finding(run=self.other_run, fingerprint='fpX:1')
+
+        response = self.diff(run=self.other_run)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data['base'])
+        self.assertTrue(response.data['base_auto_selected'])
+        self.assertIn('note', response.data)
+        self.assertEqual(response.data['summary'],
+                         {'new': 1, 'resolved': 0, 'persisted': 0})
+
+    def test_empty_fingerprint_is_excluded_not_matched(self):
+        """빈 값끼리 서로 짝지어지는 사고를 막는다 — 제외하고 그 사실을 표시."""
+        self.add_finding(run=self.base_run)    # fingerprint 기본값 ''
+        self.add_finding(run=self.target_run)  # 같은 내용이라도 매칭되면 안 된다
+
+        response = self.diff(base=self.base_run.pk)
+        self.assertEqual(response.data['summary'],
+                         {'new': 0, 'resolved': 0, 'persisted': 0})
+        self.assertEqual(response.data['items'], [])
+        self.assertEqual(response.data['excluded'], {'base': 1, 'target': 1})
+
+    def test_scope_is_same_as_other_result_reads(self):
+        """일반 사용자는 할당 프로젝트만 — 스코프 밖은 존재를 드러내지 않는 404."""
+        self.assertEqual(self.diff().status_code, status.HTTP_200_OK)
+        self.assertEqual(self.diff(run=self.other_run).status_code,
+                         status.HTTP_404_NOT_FOUND)
+        self.client.force_authenticate(user=None)
+        self.assertEqual(self.diff().status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_diff_read_is_logged(self):
+        with self.assertLogs('access', level='INFO') as captured:
+            self.diff()
+        joined = '\n'.join(captured.output)
+        self.assertIn('action=run_diff', joined)
+        self.assertIn(f'run={self.target_run.pk}', joined)
+        self.assertIn(f'project={self.project.pk}', joined)

@@ -6,6 +6,7 @@ from .views import (
     CatalogSummaryView,
     DiagnosticRuleDetailView,
     DiagnosticRuleListView,
+    RunDiffView,
     RunFindingListView,
     RunFindingReingestView,
     RunFindingSummaryView,
@@ -27,4 +28,7 @@ urlpatterns = [
          RunFindingSummaryView.as_view(), name='run-finding-summary'),
     path('analysis-runs/<int:run_id>/findings/reingest/',
          RunFindingReingestView.as_view(), name='run-finding-reingest'),
+    # 실행 간 비교 — findings와 같은 이유로 자원은 catalog 책임이다.
+    path('analysis-runs/<int:run_id>/diff/',
+         RunDiffView.as_view(), name='run-diff'),
 ]
