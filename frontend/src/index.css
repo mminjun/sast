@@ -346,6 +346,11 @@ td.truncate {
   max-width: 320px;
 }
 
+/* 좁게 유지할 컬럼(예: 이력 목록 파일명) — 전체 값은 title로 */
+td.truncate-sm {
+  max-width: 200px;
+}
+
 /* 실행 목록의 심각도 건수 배지 묶음 (0건은 muted 숫자) */
 .severity-counts {
   display: inline-flex;
@@ -488,6 +493,11 @@ td.truncate {
   background: #dbeafe;
   color: var(--low);
   margin-left: 0.45rem;
+}
+
+/* 0건 배지 — 형태는 유지하고 색만 옅게(심각도 색상은 남는다) */
+.badge-dim {
+  opacity: 0.45;
 }
 
 /* 실행 비교(diff) 상태 */

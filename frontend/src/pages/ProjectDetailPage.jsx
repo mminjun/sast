@@ -211,7 +211,7 @@ export default function ProjectDetailPage() {
                   {/* 목록은 최신순 — 첫 행이 최신 회차다 */}
                   {index === 0 && <span className="badge badge-latest">최신</span>}
                 </td>
-                <td className="truncate" title={run.original_filename}>
+                <td className="truncate truncate-sm" title={run.original_filename}>
                   {run.original_filename}
                 </td>
                 <td>
@@ -228,7 +228,12 @@ export default function ProjectDetailPage() {
                         count > 0 ? (
                           <SeverityBadge key={severity} severity={severity} label={`${label} ${count}`} />
                         ) : (
-                          <span key={severity} className="muted small">
+                          // 0건도 배지 형태 유지(옅게) — 행마다 배지 개수가 달라
+                          // 보이지 않게 정렬을 맞춘다.
+                          <span
+                            key={severity}
+                            className={`badge severity-${severity.toLowerCase()} badge-dim`}
+                          >
                             {label} 0
                           </span>
                         )
