@@ -175,7 +175,10 @@ export default function ProjectDetailPage() {
           >
             {uploading ? '업로드 중…' : 'zip 업로드'}
           </button>
-          <span className="muted">소스 zip (50MB 이하). 업로드 후 실행 버튼으로 분석합니다.</span>
+          <span className="muted">
+            같은 프로젝트 소스의 수정 버전을 zip(50MB 이하)으로 업로드하세요. 실행하면
+            이전 실행과 비교해 신규·해결이 표시됩니다.
+          </span>
           {uploadError && <p className="form-error">{uploadError}</p>}
         </form>
       )}

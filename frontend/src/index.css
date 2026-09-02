@@ -453,6 +453,22 @@ td.truncate {
   gap: 0.3rem;
 }
 
+/* 닫을 수 있는 힌트 — 경고가 아닌 안내 톤(파란 계열) */
+.hint {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  color: var(--text);
+}
+
+.hint .btn-link {
+  flex-shrink: 0;
+}
+
 /* 분석 이력의 최신 회차 표시 */
 .badge-latest {
   background: #dbeafe;

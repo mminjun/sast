@@ -61,6 +61,10 @@ export default function ProjectListPage() {
           <button type="submit" className="btn btn-primary" disabled={creating}>
             {creating ? '생성 중…' : '프로젝트 생성'}
           </button>
+          <span className="muted">
+            분석 대상 소스 하나를 프로젝트로 등록합니다. 수정된 버전은 같은 프로젝트에
+            다시 업로드해 이력을 쌓으세요.
+          </span>
           {createError && <p className="form-error">{createError}</p>}
         </form>
       )}

@@ -26,6 +26,8 @@ export default function ComparePage() {
   const [severity, setSeverity] = useState('');
   const [category, setCategory] = useState('');
   const [q, setQ] = useState('');
+  // "공통 항목 없음" 힌트 닫힘 여부 — 비교 대상이 바뀌면 다시 보여준다.
+  const [hintDismissed, setHintDismissed] = useState(false);
 
   useEffect(() => {
     api(`/api/projects/${projectId}/`)
@@ -40,6 +42,7 @@ export default function ComparePage() {
     if (!target) return;
     setError('');
     setDiff(null);
+    setHintDismissed(false);
     const qs = base ? `?base=${encodeURIComponent(base)}` : '';
     api(`/api/analysis-runs/${target}/diff/${qs}`)
       .then(setDiff)
@@ -120,6 +123,24 @@ export default function ComparePage() {
           일부 항목({excludedTotal}건)이 비교에서 제외되었습니다 (비교 키가 없는 이전 데이터).
         </p>
       )}
+      {/* 두 실행이 전혀 겹치지 않으면 서로 다른 소스를 올렸을 가능성이 크다 — 경고가
+          아니라 힌트: 정상적인 전면 리팩터링일 수도 있으니 판단은 사용자에게 맡긴다. */}
+      {diff.base &&
+        diff.summary.persisted === 0 &&
+        diff.summary.new > 0 &&
+        diff.summary.resolved > 0 &&
+        !hintDismissed && (
+          <p className="hint small">
+            <span>
+              이전 실행과 공통(유지) 항목이 없습니다 — 다른 소스를 업로드하셨는지 확인해
+              보세요. 같은 프로젝트에는 같은 소스의 수정 버전을 올려야 비교가 의미를
+              가집니다.
+            </span>
+            <button type="button" className="btn-link" onClick={() => setHintDismissed(true)}>
+              닫기
+            </button>
+          </p>
+        )}
 
       <div className="filter-row">
         {['new', 'resolved', 'persisted'].map((value) => (
