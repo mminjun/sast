@@ -16,6 +16,8 @@ export default function ProjectDetailPage() {
   const [error, setError] = useState('');
   const [uploadError, setUploadError] = useState('');
   const [uploading, setUploading] = useState(false);
+  // 커스텀 파일 버튼용 — 브라우저 기본 input 표시 대신 선택된 파일명을 직접 보여준다.
+  const [selectedFileName, setSelectedFileName] = useState('');
   // 실행은 동기(최대 120초) — 실행 중인 run id를 기억해 해당 버튼만 잠근다.
   const [executingId, setExecutingId] = useState(null);
   const [executeError, setExecuteError] = useState('');
@@ -103,6 +105,7 @@ export default function ProjectDetailPage() {
       const run = await api(`/api/projects/${id}/analysis-runs/`, { method: 'POST', form });
       setRuns((prev) => [run, ...(prev || [])]);
       fileInputRef.current.value = '';
+      setSelectedFileName('');
     } catch (err) {
       setUploadError(err instanceof ApiError ? err.detail : '업로드에 실패했습니다.');
     } finally {
@@ -140,8 +143,25 @@ export default function ProjectDetailPage() {
       <h2>분석 실행</h2>
       {isAdmin && (
         <form className="card form-inline" onSubmit={handleUpload}>
-          <input type="file" accept=".zip" ref={fileInputRef} required />
-          <button type="submit" className="btn btn-primary" disabled={uploading}>
+          <label className="btn file-pick">
+            파일 선택
+            <input
+              type="file"
+              accept=".zip"
+              ref={fileInputRef}
+              className="visually-hidden"
+              onChange={(e) => setSelectedFileName(e.target.files?.[0]?.name || '')}
+              required
+            />
+          </label>
+          <span className={selectedFileName ? 'mono small' : 'muted small'}>
+            {selectedFileName || '선택된 파일 없음'}
+          </span>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={uploading || !selectedFileName}
+          >
             {uploading ? '업로드 중…' : 'zip 업로드'}
           </button>
           <span className="muted">소스 zip (50MB 이하). 업로드 후 실행 버튼으로 분석합니다.</span>

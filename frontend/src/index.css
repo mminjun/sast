@@ -221,6 +221,21 @@ select:focus {
   flex-wrap: wrap;
 }
 
+/* 커스텀 파일 선택 — label이 버튼 역할, 실제 input은 시각적으로만 숨긴다
+   (display:none이면 required 검증이 포커스를 못 잡아 폼 제출이 막힌다) */
+.file-pick {
+  display: inline-block;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
 .form-error {
   color: var(--danger);
   font-size: 0.85rem;
