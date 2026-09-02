@@ -154,13 +154,18 @@ export default function UsersPage() {
             {users.map((u) => (
               <tr key={u.id}>
                 <td>{formatUser(u)}</td>
-                <td>
+                <td className="nowrap">
                   <span className={`badge role-${u.role === 'ADMIN' ? 'admin' : 'user'}`}>
                     {u.role === 'ADMIN' ? '관리자' : '일반'}
                   </span>
                 </td>
-                <td className={u.is_active ? '' : 'muted'}>{u.is_active ? '활성' : '비활성'}</td>
-                <td className="muted">
+                <td className={`nowrap ${u.is_active ? '' : 'muted'}`}>
+                  {u.is_active ? '활성' : '비활성'}
+                </td>
+                <td
+                  className="muted truncate"
+                  title={u.projects?.length ? u.projects.map((p) => p.name).join(', ') : undefined}
+                >
                   {/* 표시 전용 — 할당/해제는 프로젝트 상세의 멤버 관리에서 한다 (SFR-005). */}
                   {u.projects?.length ? u.projects.map((p) => p.name).join(', ') : '—'}
                 </td>
@@ -179,7 +184,7 @@ export default function UsersPage() {
                       </button>
                       <button
                         type="button"
-                        className="btn"
+                        className="btn-link"
                         disabled={actionId !== null}
                         onClick={() => handleRename(u)}
                       >

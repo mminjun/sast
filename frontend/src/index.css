@@ -266,11 +266,38 @@ select:focus {
   border-bottom: none;
 }
 
+/* td에 display:flex를 주면 table-cell 역할을 잃어 셀이 행 밖으로 넘친다 —
+   간격은 형제 마진으로 준다 (flex+gap과 같은 모양, 테이블 레이아웃 유지). */
 .row-actions {
   white-space: nowrap;
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
+}
+
+.row-actions > * + * {
+  margin-left: 0.6rem;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+/* 텍스트 링크 모양의 버튼 — 보조 액션용 (예: 사용자 이름 수정) */
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--primary);
+  font-size: 0.9rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.btn-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.btn-link:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* 긴 파일명·경로 말줄임 — 전체 값은 title 속성으로 보인다 */
