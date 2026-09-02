@@ -5,7 +5,7 @@ import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import SeverityBadge from '../components/SeverityBadge.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
-import { formatUser } from '../utils/format.js';
+import { formatDateTime, formatUser } from '../utils/format.js';
 
 const PAGE_SIZE = 50; // 서버 FindingPagination.page_size와 동일
 
@@ -87,8 +87,8 @@ export default function RunDetailPage() {
       <p className="muted">
         {run.original_filename}
         {run.created_by && <> · 실행자 {formatUser(run.created_by)}</>}
-        {' '}· 업로드 {new Date(run.created_at).toLocaleString('ko-KR')}
-        {run.finished_at && <> · 완료 {new Date(run.finished_at).toLocaleString('ko-KR')}</>}
+        {' '}· 업로드 {formatDateTime(run.created_at)}
+        {run.finished_at && <> · 완료 {formatDateTime(run.finished_at)}</>}
         {run.status === 'SUCCEEDED' && (
           <>
             {' '}· <Link to={`/projects/${run.project}/compare?target=${run.id}`}>이전 실행과 비교</Link>

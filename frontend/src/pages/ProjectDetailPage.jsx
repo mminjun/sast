@@ -6,7 +6,7 @@ import { useAuth } from '../auth/AuthContext.jsx';
 import ProjectDashboard from '../components/ProjectDashboard.jsx';
 import SeverityBadge from '../components/SeverityBadge.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
-import { formatUser } from '../utils/format.js';
+import { formatDateTime, formatUser } from '../utils/format.js';
 
 export default function ProjectDetailPage() {
   const { id } = useParams();
@@ -218,8 +218,8 @@ export default function ProjectDetailPage() {
                     <span className="muted">—</span>
                   )}
                 </td>
-                <td>{new Date(run.created_at).toLocaleString('ko-KR')}</td>
-                <td>{run.finished_at ? new Date(run.finished_at).toLocaleString('ko-KR') : '—'}</td>
+                <td>{formatDateTime(run.created_at)}</td>
+                <td>{formatDateTime(run.finished_at)}</td>
                 <td className="row-actions">
                   {isAdmin && (run.status === 'PENDING' || run.status === 'FAILED') && (
                     <button
@@ -291,7 +291,7 @@ export default function ProjectDetailPage() {
                   <tr key={m.id}>
                     <td>{formatUser(m.user)}</td>
                     <td className="muted">{formatUser(m.assigned_by)}</td>
-                    <td>{new Date(m.assigned_at).toLocaleString('ko-KR')}</td>
+                    <td>{formatDateTime(m.assigned_at)}</td>
                     <td className="row-actions">
                       <button
                         type="button"

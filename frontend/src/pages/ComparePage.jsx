@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import DiffStatusBadge from '../components/DiffStatusBadge.jsx';
 import SeverityBadge from '../components/SeverityBadge.jsx';
+import { formatDateTime } from '../utils/format.js';
 
 // 화면 필터는 전부 프론트에서 거른다 — diff 응답은 페이지네이션이 없어
 // 전체 항목을 이미 들고 있다 (서버는 상태·요약만 계산).
@@ -103,11 +104,11 @@ export default function ComparePage() {
         {diff.base && (
           <>
             {' '}· 기준 <Link to={`/runs/${diff.base.id}`}>#{diff.base.id}</Link> (
-            {new Date(diff.base.created_at).toLocaleString('ko-KR')})
+            {formatDateTime(diff.base.created_at)})
           </>
         )}
         {' '}· 대상 <Link to={`/runs/${diff.target.id}`}>#{diff.target.id}</Link> (
-        {new Date(diff.target.created_at).toLocaleString('ko-KR')})
+        {formatDateTime(diff.target.created_at)})
       </p>
 
       {diff.note && <p className="muted">{diff.note}</p>}
