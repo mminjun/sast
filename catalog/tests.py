@@ -1306,6 +1306,8 @@ class RunDiffTests(CatalogApiTestCase):
         # 유지는 target 쪽 데이터다 — 화면에서 이동할 대상은 현재 소스의 줄이다.
         self.assertEqual(by_status['persisted']['file_path'], 'app/b.py')
         self.assertEqual(by_status['persisted']['start_line'], 5)
+        # 분류 필터용 category — rule 참조에서 온다 (sql_rule = KISA-IV-01).
+        self.assertEqual(by_status['persisted']['category'], 'IV')
         # 신규가 가장 급하다 — 정렬을 응답에서 고정한다.
         self.assertEqual([item['status'] for item in response.data['items']],
                          ['new', 'resolved', 'persisted'])

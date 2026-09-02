@@ -12,6 +12,7 @@ from collections import Counter, namedtuple
 from pathlib import Path
 
 from django.db import transaction
+from django.db.models import F
 
 from analysis.models import AnalysisRun
 from analysis.services import source_dir
@@ -234,8 +235,10 @@ def ingest_findings(run):
 
 # diff 항목에 내려보내는 필드. 화면이 코드 조각까지 보고 싶으면 기존 findings
 # 목록을 쓰면 된다 — diff는 변화의 요약이라 가볍게 유지한다.
+# category는 rule 참조에서 온다(미매핑은 null) — 비교 화면의 분류 필터용.
 DIFF_ITEM_FIELDS = (
-    'rule_code', 'rule_name', 'severity', 'file_path', 'start_line', 'message',
+    'rule_code', 'rule_name', 'severity', 'category', 'file_path', 'start_line',
+    'message',
 )
 # 신규가 가장 급하고, 유지는 이미 알던 것 — 화면 정렬 기준을 응답에서 고정한다.
 _DIFF_STATUS_RANK = {'new': 0, 'resolved': 1, 'persisted': 2}
@@ -250,7 +253,8 @@ def _diff_rows(run):
     """
     included, excluded = [], 0
     rows = Finding.objects.filter(run=run).values(
-        *DIFF_ITEM_FIELDS, 'fingerprint',
+        'rule_code', 'rule_name', 'severity', 'file_path', 'start_line',
+        'message', 'fingerprint', category=F('rule__category'),
     ).order_by('start_line', 'id')
     for row in rows:
         if row['fingerprint']:

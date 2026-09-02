@@ -320,6 +320,22 @@ select:focus {
   color: #6d28d9;
 }
 
+/* 실행 비교(diff) 상태 */
+.diff-new {
+  background: #fee2e2;
+  color: var(--high);
+}
+
+.diff-resolved {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.diff-persisted {
+  background: #e5e7eb;
+  color: #374151;
+}
+
 .role-user {
   background: #e5e7eb;
   color: #374151;

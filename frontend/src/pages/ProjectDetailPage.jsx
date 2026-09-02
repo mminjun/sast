@@ -191,6 +191,9 @@ export default function ProjectDetailPage() {
                   {(run.status === 'SUCCEEDED' || run.status === 'FAILED') && (
                     <Link to={`/runs/${run.id}`}>결과 보기</Link>
                   )}
+                  {run.status === 'SUCCEEDED' && (
+                    <Link to={`/projects/${id}/compare?target=${run.id}`}>이전 실행과 비교</Link>
+                  )}
                 </td>
               </tr>
             ))}
