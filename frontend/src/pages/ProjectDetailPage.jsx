@@ -224,7 +224,7 @@ export default function ProjectDetailPage() {
                   {isAdmin && (run.status === 'PENDING' || run.status === 'FAILED') && (
                     <button
                       type="button"
-                      className="btn"
+                      className="btn btn-primary"
                       disabled={executingId !== null}
                       onClick={() => handleExecute(run.id)}
                     >
