@@ -15,6 +15,9 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
     created_by = UserBriefSerializer(read_only=True)
     severity_counts = serializers.SerializerMethodField()
     sequence = serializers.SerializerMethodField()
+    # 브레드크럼이 "#22" 같은 id 대신 이름을 보여주기 위한 표시용 필드 —
+    # 실행을 보는 사용자는 프로젝트 조회 스코프도 통과하므로 노출 문제가 없다.
+    project_name = serializers.CharField(source='project.name', read_only=True)
 
     class Meta:
         model = AnalysisRun
@@ -22,6 +25,7 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
             'id',
             'sequence',
             'project',
+            'project_name',
             'created_by',
             'original_filename',
             'status',

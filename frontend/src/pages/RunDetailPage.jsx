@@ -79,7 +79,7 @@ export default function RunDetailPage() {
     <>
       <p className="breadcrumb">
         <Link to="/projects">프로젝트</Link> /{' '}
-        <Link to={`/projects/${run.project}`}>#{run.project}</Link> / 분석 실행 {run.sequence ?? run.id}
+        <Link to={`/projects/${run.project}`}>{run.project_name || `#${run.project}`}</Link> / 분석 실행 {run.sequence ?? run.id}
       </p>
       <h1>
         {/* 표시는 프로젝트 내 회차 — URL·API 식별자는 여전히 전역 id */}

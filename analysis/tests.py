@@ -568,3 +568,13 @@ class RunOrderingAndSequenceTests(AnalysisTestCase):
         self.login(self.admin)
         detail = self.client.get(detail_url(second.pk)).data
         self.assertEqual(detail['sequence'], 2)
+
+    def test_response_includes_project_name(self):
+        """브레드크럼 표시용 — id(#22)만으로는 어디로 가는 링크인지 모호하다."""
+        run = self._make_run(self.project_a)
+        self.login(self.admin)
+
+        detail = self.client.get(detail_url(run.pk)).data
+        self.assertEqual(detail['project_name'], self.project_a.name)
+        rows = self.client.get(list_url(self.project_a.pk)).data
+        self.assertEqual(rows[0]['project_name'], self.project_a.name)

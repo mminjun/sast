@@ -1,5 +1,27 @@
 import { useEffect, useState } from 'react';
 
+/** 할당 프로젝트 전체 목록 팝오버 — 셀은 요약만 보여주고 클릭 시 띄운다. */
+function ProjectsPopover({ projects, open, onToggle }) {
+  return (
+    <span className="popover-wrap">
+      <button type="button" className="link-dotted" onClick={onToggle}>
+        {projects[0].name}
+        {projects.length > 1 && ` 외 ${projects.length - 1}개`}
+      </button>
+      {open && (
+        <div className="popover">
+          <p className="muted small popover-title">할당 프로젝트 {projects.length}개</p>
+          <ul>
+            {projects.map((p) => (
+              <li key={p.id}>{p.name}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </span>
+  );
+}
+
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { formatUser } from '../utils/format.js';
@@ -21,6 +43,26 @@ export default function UsersPage() {
   // 행별 액션(삭제·토글)은 한 번에 하나만 — 처리 중인 사용자 id를 기억해 잠근다.
   const [actionId, setActionId] = useState(null);
   const [actionError, setActionError] = useState('');
+  // 할당 프로젝트 팝오버가 열린 사용자 id — 한 번에 하나만 연다.
+  const [openProjectsFor, setOpenProjectsFor] = useState(null);
+
+  useEffect(() => {
+    if (openProjectsFor === null) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest('.popover-wrap')) {
+        setOpenProjectsFor(null);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setOpenProjectsFor(null);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [openProjectsFor]);
 
   useEffect(() => {
     api('/api/users/')
@@ -162,12 +204,19 @@ export default function UsersPage() {
                 <td className={`nowrap ${u.is_active ? '' : 'muted'}`}>
                   {u.is_active ? '활성' : '비활성'}
                 </td>
-                <td
-                  className="muted truncate"
-                  title={u.projects?.length ? u.projects.map((p) => p.name).join(', ') : undefined}
-                >
+                <td className="muted projects-cell">
                   {/* 표시 전용 — 할당/해제는 프로젝트 상세의 멤버 관리에서 한다 (SFR-005). */}
-                  {u.projects?.length ? u.projects.map((p) => p.name).join(', ') : '—'}
+                  {u.projects?.length ? (
+                    <ProjectsPopover
+                      projects={u.projects}
+                      open={openProjectsFor === u.id}
+                      onToggle={() =>
+                        setOpenProjectsFor(openProjectsFor === u.id ? null : u.id)
+                      }
+                    />
+                  ) : (
+                    '—'
+                  )}
                 </td>
                 <td className="row-actions">
                   {u.id === me?.id ? (

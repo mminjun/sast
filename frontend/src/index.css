@@ -389,6 +389,67 @@ td.truncate {
   color: #6d28d9;
 }
 
+/* 할당 프로젝트 팝오버 — 셀 폭은 고정, 목록은 띄워서 레이아웃에 영향 없게.
+   td에 overflow:hidden(.truncate)을 걸면 팝오버가 잘리므로 잘림은 트리거
+   버튼(.link-dotted)이 담당한다. */
+.projects-cell {
+  max-width: 320px;
+}
+
+.popover-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.link-dotted {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-bottom: 1px dotted var(--muted);
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.link-dotted:hover {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.popover {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  max-width: 320px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(31, 41, 51, 0.12);
+  padding: 0.6rem 0.8rem;
+  color: var(--text);
+}
+
+.popover-title {
+  margin: 0 0 0.4rem;
+}
+
+.popover ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
 /* 분석 이력의 최신 회차 표시 */
 .badge-latest {
   background: #dbeafe;

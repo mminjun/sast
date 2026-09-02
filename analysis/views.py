@@ -74,8 +74,11 @@ class ProjectAnalysisRunsView(APIView):
         project = self.get_project()
         # annotate(집계)가 붙으면 Django가 Meta 기본 정렬을 제거한다 — 같은 분에
         # 생성된 실행들이 요청마다 뒤섞이던 원인. 명시적으로 다시 고정한다.
+        # project도 함께 읽는다 — 응답의 project_name이 행마다 쿼리를 내지 않게.
         runs = list(
-            _with_severity_counts(project.analysis_runs.select_related('created_by'))
+            _with_severity_counts(
+                project.analysis_runs.select_related('created_by', 'project')
+            )
             .order_by('-created_at', '-pk')
         )
         # 회차는 목록 전체를 이미 들고 있으므로 자리에서 계산한다(쿼리 0회).
