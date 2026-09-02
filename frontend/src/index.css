@@ -389,6 +389,13 @@ td.truncate {
   color: #6d28d9;
 }
 
+/* 분석 이력의 최신 회차 표시 */
+.badge-latest {
+  background: #dbeafe;
+  color: var(--low);
+  margin-left: 0.45rem;
+}
+
 /* 실행 비교(diff) 상태 */
 .diff-new {
   background: #fee2e2;

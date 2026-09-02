@@ -200,11 +200,13 @@ export default function ProjectDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {runs.map((run) => (
+            {runs.map((run, index) => (
               <tr key={run.id}>
-                <td>
+                <td className="nowrap">
                   {/* 표시는 프로젝트 내 회차, 링크는 여전히 전역 id */}
                   <Link to={`/runs/${run.id}`}>#{run.sequence ?? run.id}</Link>
+                  {/* 목록은 최신순 — 첫 행이 최신 회차다 */}
+                  {index === 0 && <span className="badge badge-latest">최신</span>}
                 </td>
                 <td className="truncate" title={run.original_filename}>
                   {run.original_filename}
