@@ -276,6 +276,12 @@ select:focus {
   margin-left: 0.6rem;
 }
 
+/* 행 액션의 텍스트 링크(좌측)와 버튼 그룹(우측) 사이는 넓게 띄운다
+   — 형제 간격 0.6rem과 합쳐 총 2rem */
+.row-actions > .btn-link {
+  margin-right: 1.4rem;
+}
+
 .nowrap {
   white-space: nowrap;
 }

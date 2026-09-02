@@ -176,19 +176,19 @@ export default function UsersPage() {
                     <>
                       <button
                         type="button"
-                        className="btn"
-                        disabled={actionId !== null}
-                        onClick={() => handleToggle(u)}
-                      >
-                        {actionId === u.id ? '처리 중…' : u.is_active ? '비활성화' : '활성화'}
-                      </button>
-                      <button
-                        type="button"
                         className="btn-link"
                         disabled={actionId !== null}
                         onClick={() => handleRename(u)}
                       >
                         이름 수정
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={actionId !== null}
+                        onClick={() => handleToggle(u)}
+                      >
+                        {actionId === u.id ? '처리 중…' : u.is_active ? '비활성화' : '활성화'}
                       </button>
                       <button
                         type="button"
