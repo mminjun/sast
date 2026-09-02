@@ -92,7 +92,7 @@ export default function RunDetailPage() {
         {run.finished_at && <> · 완료 {formatDateTime(run.finished_at)}</>}
         {run.status === 'SUCCEEDED' && (
           <>
-            {' '}· <Link to={`/projects/${run.project}/compare?target=${run.id}`}>이전 실행과 비교</Link>
+            {' '}· <Link to={`/projects/${run.project}/compare?target=${run.id}`}>이전 분석과 비교</Link>
           </>
         )}
       </p>

@@ -338,7 +338,7 @@ class RunDiffView(RunFindingsMixin, APIView):
             **result,
         }
         if base is None:
-            payload['note'] = '비교할 이전 완료 실행이 없어 전체를 신규로 표시합니다.'
+            payload['note'] = '비교할 이전 완료된 분석이 없어 전체를 신규로 표시합니다.'
         return Response(payload)
 
     def _resolve_base(self, request, target):

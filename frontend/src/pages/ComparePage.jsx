@@ -74,7 +74,7 @@ export default function ComparePage() {
   if (!target) {
     return (
       <p className="form-error">
-        비교할 실행이 지정되지 않았습니다. <Link to={`/projects/${projectId}`}>프로젝트로 돌아가기</Link>
+        비교할 분석이 지정되지 않았습니다. <Link to={`/projects/${projectId}`}>프로젝트로 돌아가기</Link>
       </p>
     );
   }
@@ -83,7 +83,7 @@ export default function ComparePage() {
       <>
         <p className="breadcrumb">
           <Link to="/projects">프로젝트</Link> /{' '}
-          <Link to={`/projects/${projectId}`}>{project?.name || `#${projectId}`}</Link> / 실행 비교
+          <Link to={`/projects/${projectId}`}>{project?.name || `#${projectId}`}</Link> / 분석 비교
         </p>
         <p className="form-error">{error}</p>
       </>
@@ -97,10 +97,10 @@ export default function ComparePage() {
     <>
       <p className="breadcrumb">
         <Link to="/projects">프로젝트</Link> /{' '}
-        <Link to={`/projects/${projectId}`}>{project?.name || `#${projectId}`}</Link> / 실행 비교
+        <Link to={`/projects/${projectId}`}>{project?.name || `#${projectId}`}</Link> / 분석 비교
       </p>
       <h1>
-        실행 비교 {diff.base ? `#${diff.base.sequence}` : '—'} → #{diff.target.sequence}
+        분석 비교 {diff.base ? `#${diff.base.sequence}` : '—'} → #{diff.target.sequence}
       </h1>
       <p className="muted">
         {project?.name}
@@ -116,7 +116,7 @@ export default function ComparePage() {
 
       {diff.note && <p className="muted">{diff.note}</p>}
       {diff.base && diff.base_auto_selected && (
-        <p className="muted small">기준 실행 미지정 — 직전 완료 실행 #{diff.base.sequence}과 자동 비교합니다.</p>
+        <p className="muted small">기준 미지정 — 직전 완료된 분석 #{diff.base.sequence}과 자동 비교합니다.</p>
       )}
       {excludedTotal > 0 && (
         <p className="muted small">
@@ -179,7 +179,7 @@ export default function ComparePage() {
       </div>
 
       {diff.items.length === 0 && (
-        <p className="muted">비교할 결과가 없습니다 (양쪽 실행 모두 탐지 0건).</p>
+        <p className="muted">비교할 결과가 없습니다 (양쪽 분석 모두 탐지 0건).</p>
       )}
       {diff.items.length > 0 && items.length === 0 && (
         <p className="muted">조건에 맞는 항목이 없습니다.</p>

@@ -155,7 +155,7 @@ export default function ProjectDashboard({ projectId, runs }) {
         <div className="card">
           <div className="trend-header">
             <strong>
-              실행 비교 {hasBase ? `#${diff.base.sequence} → #${diff.target.sequence}` : ''}
+              분석 비교 {hasBase ? `#${diff.base.sequence} → #${diff.target.sequence}` : ''}
             </strong>
             <Link to={`/projects/${projectId}/compare?target=${latest.id}`}>전체 보기</Link>
           </div>
