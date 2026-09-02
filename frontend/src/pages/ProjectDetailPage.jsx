@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import ProjectDashboard from '../components/ProjectDashboard.jsx';
+import SeverityBadge from '../components/SeverityBadge.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { formatUser } from '../utils/format.js';
 
@@ -170,14 +171,32 @@ export default function ProjectDetailPage() {
                 <td>
                   <Link to={`/runs/${run.id}`}>{run.id}</Link>
                 </td>
-                <td>{run.original_filename}</td>
+                <td className="truncate" title={run.original_filename}>
+                  {run.original_filename}
+                </td>
                 <td>
                   <StatusBadge status={run.status} />
                 </td>
-                <td className="muted">
-                  {run.status === 'SUCCEEDED' && run.severity_counts
-                    ? `높음 ${run.severity_counts.high} · 보통 ${run.severity_counts.medium} · 낮음 ${run.severity_counts.low}`
-                    : '—'}
+                <td>
+                  {run.status === 'SUCCEEDED' && run.severity_counts ? (
+                    <span className="severity-counts">
+                      {[
+                        ['HIGH', '높음', run.severity_counts.high],
+                        ['MEDIUM', '보통', run.severity_counts.medium],
+                        ['LOW', '낮음', run.severity_counts.low],
+                      ].map(([severity, label, count]) =>
+                        count > 0 ? (
+                          <SeverityBadge key={severity} severity={severity} label={`${label} ${count}`} />
+                        ) : (
+                          <span key={severity} className="muted small">
+                            {label} 0
+                          </span>
+                        )
+                      )}
+                    </span>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
                 </td>
                 <td>{new Date(run.created_at).toLocaleString('ko-KR')}</td>
                 <td>{run.finished_at ? new Date(run.finished_at).toLocaleString('ko-KR') : '—'}</td>

@@ -94,11 +94,13 @@ export default function ProjectDashboard({ projectId, runs }) {
 
       <div className="card">
         <div className="trend-header">
-          <strong>실행별 탐지 추이</strong>
-          <span className="trend-legend small">
-            <span className="trend-legend-high">HIGH</span> /{' '}
-            <span className="trend-legend-medium">MEDIUM</span> /{' '}
-            <span className="trend-legend-low">LOW</span>
+          <span className="trend-title">
+            <strong>실행별 탐지 추이</strong>
+            <span className="trend-legend small">
+              <span className="trend-legend-high">HIGH</span> /{' '}
+              <span className="trend-legend-medium">MEDIUM</span> /{' '}
+              <span className="trend-legend-low">LOW</span>
+            </span>
           </span>
           <select value={windowSize} onChange={(e) => setWindowSize(e.target.value)}>
             <option value="10">최근 10회</option>
@@ -155,7 +157,10 @@ export default function ProjectDashboard({ projectId, runs }) {
               {compareItems.map((item, index) => (
                 <li key={index} className="widget-row">
                   <DiffStatusBadge status={item.status} />
-                  <span className="widget-main">
+                  <span
+                    className="widget-main truncate"
+                    title={`${item.rule_name || item.rule_code || '미매핑'} — ${item.file_path}:${item.start_line}`}
+                  >
                     {item.rule_name || item.rule_code || '미매핑'}{' '}
                     <span className="mono small muted">
                       — {item.file_path}:{item.start_line}

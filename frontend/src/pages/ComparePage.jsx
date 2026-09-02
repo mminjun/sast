@@ -191,7 +191,9 @@ export default function ComparePage() {
                   )}
                   <div className="muted small">{item.rule_name}</div>
                 </td>
-                <td className="mono small">{item.file_path}</td>
+                <td className="mono small truncate" title={item.file_path}>
+                  {item.file_path}
+                </td>
                 <td>
                   <SeverityBadge severity={item.severity} />
                 </td>

@@ -268,6 +268,27 @@ select:focus {
 
 .row-actions {
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* 긴 파일명·경로 말줄임 — 전체 값은 title 속성으로 보인다 */
+.truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+td.truncate {
+  max-width: 320px;
+}
+
+/* 실행 목록의 심각도 건수 배지 묶음 (0건은 muted 숫자) */
+.severity-counts {
+  display: inline-flex;
+  gap: 0.3rem;
+  white-space: nowrap;
 }
 
 /* 배지 */
@@ -366,6 +387,11 @@ select:focus {
   font-weight: 700;
 }
 
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 /* 프로젝트 대시보드 (실행 추이·비교·룰 상위) */
 .stat-up {
   color: var(--high);
@@ -387,6 +413,13 @@ select:focus {
   align-items: center;
   gap: 0.8rem;
   justify-content: space-between;
+}
+
+/* 카드 헤더 좌측 그룹(제목+범례) — 우측에는 셀렉트·링크만 남긴다 */
+.trend-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
 }
 
 .trend-legend-high {
@@ -416,15 +449,26 @@ select:focus {
 .trend-bar {
   flex: 1;
   min-width: 42px;
-  max-width: 120px;
+  max-width: 72px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
 }
 
+/* 막대는 run 상세로 가는 링크다 — hover에서 클릭 가능함이 드러나게 */
 .trend-bar:hover {
   text-decoration: none;
   opacity: 0.85;
+}
+
+.trend-bar:hover .trend-stack {
+  outline: 2px solid #bfdbfe;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.trend-bar:hover .trend-label {
+  color: var(--primary);
 }
 
 .trend-stack {

@@ -182,7 +182,7 @@ export default function RunDetailPage() {
                   )}
                   <div className="muted small">{f.rule_name}</div>
                 </td>
-                <td className="mono small">
+                <td className="mono small truncate" title={`${f.file_path}:${f.start_line}`}>
                   {f.file_path}:{f.start_line}
                 </td>
                 <td>
