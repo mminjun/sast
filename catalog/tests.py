@@ -43,6 +43,7 @@ from .services import bare_check_id, ingest_findings, normalize_severity
 from .views import FindingPagination
 
 User = get_user_model()
+LF = chr(10)  # 줄바꿈 문자 — 테스트 소스 조립용
 PASSWORD = 'sast-test-pw-9182'
 
 SAMPLES_DIR = Path(settings.BASE_DIR) / 'catalog' / 'samples'
@@ -459,6 +460,42 @@ class IngestTests(WorkspaceMixin, TestCase):
         self.assertEqual(finding.code_snippet, '')
         # 조각은 없어도 결과 자체는 남는다.
         self.assertEqual(finding.rule_code, 'KISA-IV-01')
+        self.assertIsNone(finding.extra['context'])
+
+    def test_context_lines_surround_the_hit(self):
+        """취약 줄 앞뒤 3줄을 표시용 문맥으로 extra에 둔다 — 조각 자체는 취약 줄만."""
+        content = LF.join('line%d' % n for n in range(1, 11)) + LF
+        target = self.write_source(self.run, 'app/ctx.py', content)
+        self.ingest([semgrep_result(target, 'KISA-IV-01', line=5)])
+
+        finding = Finding.objects.get(run=self.run)
+        self.assertEqual(finding.code_snippet, 'line5')
+        self.assertEqual(finding.extra['context'], {
+            'start_line': 2,
+            'lines': ['line2', 'line3', 'line4', 'line5', 'line6', 'line7', 'line8'],
+        })
+
+    def test_context_is_clamped_at_file_start(self):
+        target = self.write_source(self.run, 'app/top.py', 'a = 1' + LF + 'b = 2' + LF)
+        self.ingest([semgrep_result(target, 'KISA-IV-01', line=1)])
+
+        context = Finding.objects.get(run=self.run).extra['context']
+        self.assertEqual(context, {'start_line': 1, 'lines': ['a = 1', 'b = 2']})
+
+    def test_fingerprint_ignores_context(self):
+        """근처 줄이 바뀌어도 같은 취약 줄이면 같은 핑거프린트 — 비교(DAR-009) 안정성."""
+        other_run = self.make_run(self.project, self.admin)
+        first = self.write_source(self.run, 'app/db.py', '# v1' + LF + 'q = 1' + LF)
+        second = self.write_source(other_run, 'app/db.py', '# v2 changed' + LF + 'q = 1' + LF)
+        self.ingest([semgrep_result(first, 'KISA-IV-01', line=2)])
+        other_run.raw_result = {'results': [semgrep_result(second, 'KISA-IV-01', line=2)]}
+        other_run.save(update_fields=['raw_result'])
+        ingest_findings(other_run)
+
+        a = Finding.objects.get(run=self.run)
+        b = Finding.objects.get(run=other_run)
+        self.assertNotEqual(a.extra['context'], b.extra['context'])
+        self.assertEqual(a.fingerprint, b.fingerprint)
 
     def test_same_location_reads_file_once(self):
         target = self.write_source(self.run, 'app/multi.py', 'import pdb\npdb.set_trace()\n')

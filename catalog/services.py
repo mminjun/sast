@@ -30,6 +30,15 @@ MAX_SNIPPET_LINE_CHARS = 500
 # 제한되지 않으므로, 난독화·압축된 1줄 파일이면 그 한 줄이 통째로 메모리에 올라온다
 # (압축 해제 상한이 100MB라 그만큼까지 가능). 그 정도 파일의 조각은 읽어도 쓸모없다.
 MAX_SNIPPET_SOURCE_BYTES = 2 * 1024 * 1024
+# 취약 줄 앞뒤로 함께 보여줄 문맥 줄 수. 한 줄만 보면 `cursor.execute(query)`처럼 값이
+# 어디서 왔는지 알 수 없어 판정이 안 된다. 문맥은 표시용으로만 extra에 두고 code_snippet
+# 과 핑거프린트에는 넣지 않는다 — 근처 줄이 바뀌었다고 같은 취약점이 '해결+신규'로
+# 갈라지면 안 된다 (DAR-009 비교 안정성).
+SNIPPET_CONTEXT_LINES = 3
+# 문맥 전체(취약 줄 포함)의 상한. 조각 상한과 같은 이유로 둔다. 넘으면 문맥을 버리고
+# 조각만 남긴다 — 화면은 문맥이 없으면 조각으로 되돌아간다.
+MAX_CONTEXT_LINES = MAX_SNIPPET_LINES + 2 * SNIPPET_CONTEXT_LINES
+MAX_CONTEXT_CHARS = 2 * MAX_SNIPPET_CHARS
 
 # 매핑에 실패했을 때만 쓰는 폴백 표 (QLT-004).
 SEMGREP_SEVERITY_FALLBACK = {
@@ -105,9 +114,11 @@ def _read_snippet(source_root, relative_path, start_line, end_line, cache):
 
     한 줄에 여러 룰이 걸리면 결과 건마다 같은 파일을 다시 열게 되므로, 수집 1회
     범위에서 (경로, 줄 범위) 단위로 캐시한다.
+    반환은 (조각 문자열, 문맥 dict 또는 None). 문맥은 {'start_line', 'lines'} 형태로,
+    lines에는 취약 줄 앞뒤 SNIPPET_CONTEXT_LINES줄이 함께 들어 있다.
     """
     if start_line < 1 or not relative_path:
-        return ''
+        return '', None
 
     cache_key = (relative_path, start_line, end_line)
     if cache_key not in cache:
@@ -116,40 +127,56 @@ def _read_snippet(source_root, relative_path, start_line, end_line, cache):
 
 
 def _extract_lines(source_root, relative_path, start_line, end_line):
-    """파일에서 지정 줄 범위를 읽는다. 읽을 수 없으면 빈 문자열.
+    """파일에서 지정 줄 범위와 그 앞뒤 문맥을 한 번에 읽는다.
 
-    경로는 이미 _relative_path()를 통과한 값이지만, 파일을 여는 지점에서 한 번 더
-    격리 루트 안인지 확인한다 (analysis의 zip 추출과 같은 다중 방어).
+    읽을 수 없으면 ('', None). 경로는 이미 _relative_path()를 통과한 값이지만, 파일을
+    여는 지점에서 한 번 더 격리 루트 안인지 확인한다 (analysis의 zip 추출과 같은
+    다중 방어).
     """
     target = (source_root / relative_path).resolve()
     try:
         target.relative_to(source_root)
     except ValueError:
-        return ''
+        return '', None
 
-    picked = []
+    last_line = min(end_line or start_line, start_line + MAX_SNIPPET_LINES - 1)
+    context_start = max(1, start_line - SNIPPET_CONTEXT_LINES)
+    context_end = last_line + SNIPPET_CONTEXT_LINES
+
+    picked = {}
     try:
         if not target.is_file():
-            return ''
+            return '', None
         # 줄 단위로 읽기 전에 파일 크기부터 본다 — 줄 수를 제한해도 한 줄의 길이는
         # 제한되지 않으므로, 큰 파일에서는 한 줄을 읽는 것만으로 메모리가 튄다.
         if target.stat().st_size > MAX_SNIPPET_SOURCE_BYTES:
-            return ''
+            return '', None
 
-        last_line = min(end_line or start_line, start_line + MAX_SNIPPET_LINES - 1)
         # 분석 대상 소스의 인코딩은 우리가 정할 수 없으므로 깨진 바이트는 대체 문자로
         # 두고 계속한다 — 조각 하나 때문에 수집 전체가 실패하면 안 된다.
         with target.open('r', encoding='utf-8', errors='replace') as handle:
             for number, line in enumerate(handle, start=1):
-                if number > last_line:
+                if number > context_end:
                     break
-                if number >= start_line:
-                    picked.append(line.rstrip('\n')[:MAX_SNIPPET_LINE_CHARS])
+                if number >= context_start:
+                    picked[number] = line.rstrip('\n')[:MAX_SNIPPET_LINE_CHARS]
     except OSError:
-        return ''
+        return '', None
 
-    return '\n'.join(picked)[:MAX_SNIPPET_CHARS]
+    snippet = '\n'.join(
+        picked[n] for n in range(start_line, last_line + 1) if n in picked
+    )[:MAX_SNIPPET_CHARS]
+    if not snippet:
+        return '', None
 
+    context_lines = [picked[n] for n in sorted(picked)]
+    # 문맥은 부가 정보다 — 상한을 넘으면 문맥만 버리고 조각은 남긴다.
+    if (
+        len(context_lines) > MAX_CONTEXT_LINES
+        or sum(len(line) for line in context_lines) > MAX_CONTEXT_CHARS
+    ):
+        return snippet, None
+    return snippet, {'start_line': context_start, 'lines': context_lines}
 
 def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
     """Semgrep 결과 1건을 Finding으로 바꾼다. 저장하지 않을 결과면 None."""
@@ -165,6 +192,9 @@ def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
     start_line = (item.get('start') or {}).get('line') or 0
     end_line = (item.get('end') or {}).get('line') or start_line
     semgrep_severity = extra.get('severity') or ''
+    snippet, context = _read_snippet(
+        source_root, relative_path, start_line, end_line, snippet_cache
+    )
 
     return Finding(
         run=run,
@@ -179,15 +209,16 @@ def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
         start_line=start_line,
         end_line=end_line,
         message=extra.get('message') or '',
-        code_snippet=_read_snippet(
-            source_root, relative_path, start_line, end_line, snippet_cache
-        ),
+        code_snippet=snippet,
         extra={
             'cwe': metadata.get('cwe', ''),
             'kisa_name': metadata.get('kisa_name', ''),
             # 도구가 원래 뭐라고 했는지 남긴다 — 최종 등급이 카탈로그에서 왔다는 것을
             # 결과만 보고도 대조할 수 있어야 한다 (QLT-004).
             'semgrep_severity': semgrep_severity,
+            # 표시용 문맥(취약 줄 앞뒤). 핑거프린트는 code_snippet만 보므로 여기 값이
+            # 달라져도 실행 간 매칭에는 영향이 없다.
+            'context': context,
         },
     )
 

@@ -84,6 +84,7 @@
 | 실행 간 diff API (9/2) | 신규/해결/유지 분류, base 자동 선택, 중복 보정 | catalog `GET /api/analysis-runs/{id}/diff/` |
 | 비교 페이지 (9/2) | 상태 칩·심각도·유형·검색 필터, 안내 3종 | frontend `ComparePage` |
 | 프로젝트 대시보드 (9/2) | 메트릭 카드 4종, 심각도 스택 추이(CSS), 비교 요약·룰 상위 위젯 | frontend `ProjectDashboard` |
+| 코드 조각 문맥·강조 (9/4) | 취약 줄 앞뒤 3줄을 extra.context에 표시용으로 저장, 화면은 줄 번호+취약 줄만 색 강조. 핑거프린트는 code_snippet만 봐 비교 안정성 유지 | catalog/services.py `_extract_lines`, frontend `CodeSnippet` |
 | 분석 이력화 (9/2) | 프로젝트 내 회차(sequence) 표시, 행별 직전 대비 변화량 | analysis(sequence), catalog `GET /api/projects/{id}/run-changes/` |
 
 ## 현황 요약 (2026-09-02 기준)

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
+import CodeSnippet from '../components/CodeSnippet.jsx';
 import SeverityBadge from '../components/SeverityBadge.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { formatDateTime, formatUser } from '../utils/format.js';
@@ -191,7 +192,7 @@ export default function RunDetailPage() {
                   {f.code_snippet && (
                     <details>
                       <summary className="muted small">코드 보기</summary>
-                      <pre className="snippet">{f.code_snippet}</pre>
+                      <CodeSnippet finding={f} />
                     </details>
                   )}
                 </td>
