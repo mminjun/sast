@@ -20,7 +20,7 @@ export default function ProjectDetailPage() {
   const [uploading, setUploading] = useState(false);
   // 커스텀 파일 버튼용 — 브라우저 기본 input 표시 대신 선택된 파일명을 직접 보여준다.
   const [selectedFileName, setSelectedFileName] = useState('');
-  // 실행은 동기(최대 120초) — 실행 중인 run id를 기억해 해당 버튼만 잠근다.
+  // 실행은 동기(최대 10분, ANALYSIS_SEMGREP_TIMEOUT) — 실행 중인 run id를 기억해 해당 버튼만 잠근다.
   const [executingId, setExecutingId] = useState(null);
   const [executeError, setExecuteError] = useState('');
   const fileInputRef = useRef(null);
@@ -177,8 +177,8 @@ export default function ProjectDetailPage() {
           </button>
           <span className="muted">
             {runs?.some((r) => r.status === 'SUCCEEDED')
-              ? '수정한 소스를 zip으로 업로드하세요 (50MB 이하). 실행하면 이전 회차와 비교해 신규·해결 항목을 보여줍니다.'
-              : '분석할 소스를 zip으로 업로드하세요 (50MB 이하). 실행하면 취약점을 진단합니다.'}
+              ? '수정한 소스를 zip으로 업로드하세요 (zip 200MB·파일 20,000개 이하). 실행하면 이전 회차와 비교해 신규·해결 항목을 보여줍니다.'
+              : '분석할 소스를 zip으로 업로드하세요 (zip 200MB·파일 20,000개 이하). 실행하면 취약점을 진단합니다 (최대 10분).'}
           </span>
           {uploadError && <p className="form-error">{uploadError}</p>}
         </form>
@@ -268,7 +268,7 @@ export default function ProjectDetailPage() {
                       disabled={executingId !== null}
                       onClick={() => handleExecute(run.id)}
                     >
-                      {executingId === run.id ? '분석 중… (최대 2분)' : '실행'}
+                      {executingId === run.id ? '분석 중… (최대 10분)' : '실행'}
                     </button>
                   )}
                   {(run.status === 'SUCCEEDED' || run.status === 'FAILED') && (

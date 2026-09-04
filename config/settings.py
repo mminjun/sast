@@ -216,9 +216,12 @@ MEDIA_ROOT = BASE_DIR / 'media'
 ANALYSIS_WORKSPACE_ROOT = MEDIA_ROOT / 'analysis_runs'
 
 # zip 업로드·압축 해제 상한 (SEC-008 — zip bomb 기본 방어)
-ANALYSIS_MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 원본 zip 50MB
-ANALYSIS_MAX_EXTRACTED_SIZE = 100 * 1024 * 1024  # 압축 해제 후 총합 100MB
-ANALYSIS_MAX_EXTRACTED_FILES = 1000
+# 실제 분석 대상(수천~수만 파일 규모 자바 프로젝트 등)에 맞춰 .env로 조정한다. 값이 커져도
+# 압축 해제 루프가 실제 기록 바이트를 세어 중단하고, 코드 조각 추출은 별도 2MB 파일 상한을
+# 두므로 zip bomb 방어와 메모리 보호는 유지된다.
+ANALYSIS_MAX_UPLOAD_SIZE = int(os.getenv('ANALYSIS_MAX_UPLOAD_MB', '200')) * 1024 * 1024
+ANALYSIS_MAX_EXTRACTED_SIZE = int(os.getenv('ANALYSIS_MAX_EXTRACTED_MB', '500')) * 1024 * 1024
+ANALYSIS_MAX_EXTRACTED_FILES = int(os.getenv('ANALYSIS_MAX_EXTRACTED_FILES', '20000'))
 
 # 진단 기준 카탈로그 (SFR-012, SFR-013, DAR-007)
 # 룰 디렉토리는 두 곳에서 쓰인다 — seed_catalog 커맨드가 매핑을 읽고, Semgrep이 분석에
@@ -233,7 +236,8 @@ CATALOG_SEED_FILE = BASE_DIR / 'catalog' / 'data' / 'kisa_rules.json'
 # 레지스트리 룰은 KISA 항목 매핑이 없어 등급 근거가 없는 결과를 만들고, 오탐 통제도
 # 불가능하다 (QLT-002, docs/decisions.md).
 ANALYSIS_SEMGREP_CONFIG = str(CATALOG_RULES_DIR)
-ANALYSIS_SEMGREP_TIMEOUT = 120  # 초 — 타임아웃 시 FAILED로 기록
+# 초 — 타임아웃 시 FAILED로 기록. 수천 파일 규모 프로젝트는 2분으로 부족해 .env로 조정한다.
+ANALYSIS_SEMGREP_TIMEOUT = int(os.getenv('ANALYSIS_SEMGREP_TIMEOUT', '600'))
 
 # 분석 대상 언어 파일 확장자. 현재 카탈로그 룰 21개가 전부 languages: [python]이라
 # .py 하나다 — 다른 언어 룰을 추가하면 여기도 함께 갱신한다 (SFR-012, TST-008).

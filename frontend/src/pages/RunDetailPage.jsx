@@ -102,7 +102,7 @@ export default function RunDetailPage() {
       {isAdmin && (run.status === 'PENDING' || run.status === 'FAILED') && (
         <p>
           <button type="button" className="btn btn-primary" disabled={executing} onClick={handleExecute}>
-            {executing ? '분석 중… (최대 2분)' : '분석 실행'}
+            {executing ? '분석 중… (최대 10분)' : '분석 실행'}
           </button>
         </p>
       )}

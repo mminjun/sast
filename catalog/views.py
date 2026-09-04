@@ -197,7 +197,7 @@ class FindingPagination(PageNumberPagination):
 
     전역(REST_FRAMEWORK 설정)으로 걸지 않는 이유: 이미 만들어진 accounts·projects·
     analysis 응답 형태가 함께 바뀌어 회귀가 된다. 상한이 필요한 곳은 결과 목록
-    하나뿐이다 — 한 실행에서 파일 1000개(SEC-008 상한)에 걸쳐 수천 건이 나올 수
+    하나뿐이다 — 한 실행에서 파일 수천 개(SEC-008 상한)에 걸쳐 수천 건이 나올 수
     있고, 건마다 코드 조각이 붙어 응답이 수 MB가 된다.
     """
 

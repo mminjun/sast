@@ -47,8 +47,8 @@
 | SEC-005 | 프로젝트 소속 검증 | ✅ | projects·analysis·catalog의 스코프 쿼리셋 | IDOR 방어 — 결과 조회도 스코프된 run을 거쳐야 도달. 할당 해제 즉시 404 (테스트로 고정). 브라우저 E2E — 미할당 프로젝트가 일반 계정에 안 보임(8/28) |
 | SEC-006 | 비인가 정보 노출 방지 | ✅ | 전 앱 (기본 수준, plan.md §5) | 미할당·미존재 동일 404(본문까지 동일), 쓰기 균일 403, **스코프 검사가 필터 검증보다 먼저**라 400/404 차이로 존재를 떠볼 수 없음. 응답·저장값에 서버 절대경로·workspace UUID 없음. 프론트도 404 사유를 구분 없이 "찾을 수 없습니다"로만 표시(8/28) |
 | SEC-007 | 분석 작업 영역 격리 | ✅ | analysis/services.py `workspace_dir` + catalog/services.py `_relative_path` | 실행별 디렉토리 분리. Semgrep이 돌려준 절대경로를 상대경로로 정규화하고, 격리 밖 경로의 결과는 저장하지 않음 |
-| SEC-008 | 파일 경로 검증 | ✅ | analysis/services.py `_is_unsafe_member` | 절대경로·드라이브문자·`..`·심볼릭링크·resolve() 최종검증 다중 방어, zip bomb 상한(100MB/1000개, 실측값 기준) |
-| SEC-009 | 분석 실행 보호 | ✅ | analysis/services.py + catalog/services.py `ingest_findings` | Semgrep 타임아웃(120초), 실행 상태 원자적 전환. 표준화는 `select_for_update`로 직렬화, 코드 조각은 파일 크기·줄 길이 상한(secure-review 수정) |
+| SEC-008 | 파일 경로 검증 | ✅ | analysis/services.py `_is_unsafe_member` | 절대경로·드라이브문자·`..`·심볼릭링크·resolve() 최종검증 다중 방어, zip bomb 상한(기본 zip 200MB·해제 500MB·20,000개, .env로 조정) |
+| SEC-009 | 분석 실행 보호 | ✅ | analysis/services.py + catalog/services.py `ingest_findings` | Semgrep 타임아웃(기본 600초, .env로 조정), 실행 상태 원자적 전환. 표준화는 `select_for_update`로 직렬화, 코드 조각은 파일 크기·줄 길이 상한(secure-review 수정) |
 | SEC-010 | 외부 구성요소 관리 | ✅ | requirements.txt | 직접 의존성 6종 버전 고정. Semgrep 1.175.0(LGPL-2.1, subprocess 호출만이라 카피레프트 미전이), PyYAML 6.0.3(MIT), `--metrics=off`로 텔레메트리 차단. 운영 배포 전 후속 과제: DRF BrowsableAPIRenderer 비활성 |
 
 ## TST (테스트)
