@@ -1,0 +1,60 @@
+# KISA 제3절 시간 및 상태 (TS) — C 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조.
+
+rules:
+  - id: kisa-ts-01-c-toctou
+    languages: [c]
+    severity: WARNING
+    message: >-
+      경쟁조건: 검사 시점과 사용 시점 (KISA-TS-01). 파일을 access/stat으로 검사한 뒤
+      같은 경로를 다시 열고 있어, 그 사이에 파일이 바뀌면 검사가 무효가 됩니다.
+      검사 없이 바로 열고 결과(errno)로 판단하거나, 연 뒤 fstat으로 확인하세요.
+    metadata:
+      kisa_code: KISA-TS-01
+      kisa_name: '경쟁조건: 검사 시점과 사용 시점(TOCTOU)'
+      cwe: CWE-367
+    # 같은 함수 안에서 같은 경로 변수($PATH)에 대해 검사→열기가 이어질 때만 잡는다.
+    # 검사와 사용이 다른 함수에 있으면 닿지 않는다.
+    pattern-either:
+      # 검사 결과를 조건으로 쓰는 전형
+      - pattern: |
+          if (access($PATH, ...) == 0) { ... open($PATH, ...); ... }
+      - pattern: |
+          if (access($PATH, ...) == 0) { ... fopen($PATH, ...); ... }
+      - pattern: |
+          if (access($PATH, ...) != -1) { ... open($PATH, ...); ... }
+      - pattern: |
+          if (access($PATH, ...) != -1) { ... fopen($PATH, ...); ... }
+      - pattern: |
+          if (!access($PATH, ...)) { ... open($PATH, ...); ... }
+      - pattern: |
+          if (!access($PATH, ...)) { ... fopen($PATH, ...); ... }
+      - pattern: |
+          if (stat($PATH, ...) == 0) { ... open($PATH, ...); ... }
+      - pattern: |
+          if (stat($PATH, ...) == 0) { ... fopen($PATH, ...); ... }
+      # 검사 결과를 버리고 이어서 여는 형태
+      - pattern: |
+          access($PATH, ...);
+          ...
+          open($PATH, ...);
+      - pattern: |
+          access($PATH, ...);
+          ...
+          fopen($PATH, ...);
+      - pattern: |
+          stat($PATH, ...);
+          ...
+          open($PATH, ...);
+      - pattern: |
+          stat($PATH, ...);
+          ...
+          fopen($PATH, ...);
+      - pattern: |
+          lstat($PATH, ...);
+          ...
+          open($PATH, ...);
+      - pattern: |
+          lstat($PATH, ...);
+          ...
+          fopen($PATH, ...);

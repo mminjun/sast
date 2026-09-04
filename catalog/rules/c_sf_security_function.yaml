@@ -1,0 +1,133 @@
+# KISA 제2절 보안기능 (SF) — C 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조.
+
+rules:
+  - id: kisa-sf-03-c-insecure-permission
+    languages: [c]
+    severity: ERROR
+    message: >-
+      중요한 자원에 대한 잘못된 권한 설정 (KISA-SF-03). 다른 사용자(others)에게 쓰기
+      권한을 주는 모드입니다. 0600·0640·0750처럼 필요한 최소 권한만 주고, umask(0)은
+      쓰지 마세요.
+    metadata:
+      kisa_code: KISA-SF-03
+      kisa_name: 중요한 자원에 대한 잘못된 권한 설정
+      cwe: CWE-732
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: chmod($PATH, $MODE)
+              - pattern: fchmod($FD, $MODE)
+              - pattern: open($PATH, $FLAGS, $MODE)
+              - pattern: creat($PATH, $MODE)
+              - pattern: mkdir($PATH, $MODE)
+          # 8진수 리터럴의 마지막 자리(others)에 쓰기 비트(2)가 켜진 값, 또는
+          # others 쓰기를 뜻하는 심볼릭 상수. 모드를 변수로 넘기면 판정하지 않는다.
+          - metavariable-regex:
+              metavariable: $MODE
+              regex: '(^0[0-7]*[2367]$)|(.*\bS_IWOTH\b.*)|(.*\bS_IRWXO\b.*)'
+      - pattern: umask(0)
+      - pattern: umask(00)
+      - pattern: umask(000)
+
+  - id: kisa-sf-04-c-weak-crypto-algorithm
+    languages: [c]
+    severity: ERROR
+    message: >-
+      취약한 암호화 알고리즘 사용 (KISA-SF-04). MD5·SHA-1·DES·RC4는 안전성이 깨진
+      알고리즘입니다. 해시는 SHA-256 이상(EVP_sha256), 암호화는 AES(EVP_aes_256_gcm)를
+      사용하세요.
+    metadata:
+      kisa_code: KISA-SF-04
+      kisa_name: 취약한 암호화 알고리즘 사용
+      cwe: CWE-327
+    pattern-either:
+      # OpenSSL 저수준 API
+      - pattern: MD5(...)
+      - pattern: MD5_Init(...)
+      - pattern: MD4(...)
+      - pattern: SHA1(...)
+      - pattern: SHA1_Init(...)
+      - pattern: DES_set_key(...)
+      - pattern: DES_ecb_encrypt(...)
+      - pattern: DES_ncbc_encrypt(...)
+      - pattern: DES_ecb3_encrypt(...)
+      - pattern: RC4(...)
+      - pattern: RC4_set_key(...)
+      # OpenSSL EVP 알고리즘 선택자
+      - pattern: EVP_md5()
+      - pattern: EVP_md4()
+      - pattern: EVP_sha1()
+      - pattern: EVP_des_ecb()
+      - pattern: EVP_des_cbc()
+      - pattern: EVP_des_ede3_cbc()
+      - pattern: EVP_rc4()
+
+  - id: kisa-sf-06-c-hardcoded-secret
+    languages: [c]
+    severity: ERROR
+    message: >-
+      하드코드된 중요정보 (KISA-SF-06). 비밀번호·키·토큰이 소스에 상수로 들어 있습니다.
+      환경변수나 설정 파일에서 읽고, 저장소에는 값을 남기지 마세요.
+    metadata:
+      kisa_code: KISA-SF-06
+      kisa_name: 하드코드된 중요정보
+      cwe: CWE-798
+    patterns:
+      - pattern-either:
+          - pattern: $TYPE $NAME = "...";
+          - pattern: $TYPE *$NAME = "...";
+          - pattern: $TYPE $NAME[] = "...";
+          - pattern: $TYPE $NAME[$SIZE] = "...";
+          - pattern: $NAME = "...";
+          # 전처리기 매크로는 C AST 패턴이 닿지 않아 원문 정규식으로 잡는다. 이름
+          # 캡처(NAME)가 메타변수가 되어 아래 이름 필터를 같이 거친다.
+          - pattern-regex: '#define\s+(?P<NAME>\w+)\s+"[^"]+"'
+      # 이름이 비밀 정보를 가리킬 때만 잡는다 — 일반 문자열 상수까지 걸면 전부 오탐.
+      # 한계: PASSWORD_ENV("APP_DB_PASSWORD")처럼 값이 아니라 위치를 담은 상수도
+      # 이름만 보고 걸린다 (docs/decisions.md).
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^[a-z_]*(password|passwd|pwd|secret|api_?key|token|private_?key)[a-z_0-9]*$
+      # 빈 문자열·자리표시자는 값이 아니다.
+      - pattern-not: $TYPE $NAME = "";
+      - pattern-not: $NAME = "";
+
+  - id: kisa-sf-08-c-insecure-random
+    languages: [c]
+    severity: WARNING
+    message: >-
+      적절하지 않은 난수 값 사용 (KISA-SF-08). rand/random은 예측 가능한 의사난수라
+      토큰·세션·키 생성에 쓰면 안 됩니다. /dev/urandom, getrandom(2) 또는 OpenSSL
+      RAND_bytes를 사용하세요.
+    metadata:
+      kisa_code: KISA-SF-08
+      kisa_name: 적절하지 않은 난수 값 사용
+      cwe: CWE-338
+    patterns:
+      # Python 룰(kisa-sf-08-insecure-random)과 같은 기준 — 보안 용도로 쓰이는 이름에
+      # 대입될 때만 잡는다. 주사위·셔플 같은 일반 용도까지 걸면 오탐이 대부분이 된다.
+      - pattern-either:
+          - pattern: $NAME = <... rand() ...>;
+          - pattern: $NAME = <... random() ...>;
+          - pattern: $NAME[$I] = <... rand() ...>;
+          - pattern: $NAME[$I] = <... random() ...>;
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^[a-z_]*(token|session|otp|password|passwd|secret|nonce|salt|key|reset|auth|iv)[a-z_0-9]*$
+
+  - id: kisa-sf-13-c-secret-in-comment
+    languages: [c]
+    severity: WARNING
+    message: >-
+      주석문 안에 포함된 시스템 주요정보 (KISA-SF-13). 주석에 적힌 비밀번호·키는 소스
+      열람만으로 노출됩니다. 값은 지우고 시크릿 저장소·환경변수 위치만 남기세요.
+    metadata:
+      kisa_code: KISA-SF-13
+      kisa_name: 주석문 안에 포함된 시스템 주요정보
+      cwe: CWE-615
+    # Python 룰과 같은 원칙(AST는 주석을 보지 못하므로 원문 정규식, '키워드 = 값'
+    # 형태로 한정)을 C 주석 문법(// 와 /* )으로 옮긴 것. 블록 주석의 둘째 줄 이후
+    # (' * password = x')는 '*p = ...' 코드와 구분할 수 없어 잡지 않는다.
+    patterns:
+      - pattern-regex: '(//|/\*).*?(?i:password|passwd|pwd|secret|api[_-]?key|token)\s*[:=]\s*\S+'

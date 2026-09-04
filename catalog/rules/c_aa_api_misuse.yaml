@@ -1,0 +1,26 @@
+# KISA 제7절 API 오용 (AA) — C 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조.
+
+rules:
+  - id: kisa-aa-02-c-vulnerable-api
+    languages: [c]
+    severity: WARNING
+    message: >-
+      취약한 API 사용 (KISA-AA-02). 안전하지 않다고 알려져 사용이 권고되지 않는
+      API입니다. tmpnam/tempnam/mktemp는 mkstemp로, getwd는 getcwd로, getpw는
+      getpwuid로 교체하세요.
+    metadata:
+      kisa_code: KISA-AA-02
+      kisa_name: 취약한 API 사용
+      cwe: CWE-477
+    # 경계(Python 룰과 동일): 다른 KISA 항목으로 분류되는 위험 API(gets/strcpy=IV-16,
+    # system=IV-05, MD5=SF-04, rand=SF-08, free 후 사용=CE-03 등)는 여기서 다시 잡지
+    # 않는다. AA-02는 다른 항목에 속하지 않는 폐기·위험 API만 담당한다 (QLT-004).
+    pattern-either:
+      # 이름만 만들고 파일은 만들지 않아 경쟁 조건이 생기는 임시 파일 API
+      - pattern: tmpnam(...)
+      - pattern: tempnam(...)
+      - pattern: mktemp(...)
+      # 목적지 버퍼 크기를 받지 않아 폐기된 API
+      - pattern: getwd(...)
+      - pattern: getpw(...)
