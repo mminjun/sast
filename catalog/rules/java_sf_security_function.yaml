@@ -1,0 +1,223 @@
+# KISA 제2절 보안기능 (SF) — Java 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-sf-01-java-missing-authentication
+    languages: [java]
+    severity: ERROR
+    message: >-
+      적절한 인증 없는 중요기능 허용 (KISA-SF-01). 관리 경로(admin/manage/internal/actuator) 또는 모든 요청을 인증
+      없이 허용하고 있습니다. authenticated()/hasRole()로 제한하세요.
+    metadata:
+      kisa_code: KISA-SF-01
+      kisa_name: 적절한 인증 없는 중요기능 허용
+      cwe: CWE-306
+    # anyRequest().permitAll()과 관리성 경로 이름의 permitAll()만. /public, /login 같은 공개 경로는 잡지 않는다.
+    pattern-either:
+      - pattern: $X.anyRequest().permitAll()
+      - patterns:
+          - pattern-either:
+              - pattern: $X.antMatchers($P, ...).permitAll()
+              - pattern: $X.requestMatchers($P, ...).permitAll()
+              - pattern: $X.mvcMatchers($P, ...).permitAll()
+          - metavariable-regex:
+              metavariable: $P
+              regex: (?i)^"[^"]*(admin|manage|internal|actuator)[^"]*"$
+
+  - id: kisa-sf-03-java-insecure-permission
+    languages: [java]
+    severity: ERROR
+    message: >-
+      중요한 자원에 대한 잘못된 권한 설정 (KISA-SF-03). 다른 사용자(others)에게 읽기·쓰기·실행을 허용하는 권한입니다. 소유자·그룹으로
+      제한하세요.
+    metadata:
+      kisa_code: KISA-SF-03
+      kisa_name: 중요한 자원에 대한 잘못된 권한 설정
+      cwe: CWE-732
+    # setXxx(true, false)의 둘째 인자 false = ownerOnly 아님. fromString은 others 쓰기 비트만 본다.
+    pattern-either:
+      - pattern: $F.setReadable(true, false)
+      - pattern: $F.setWritable(true, false)
+      - pattern: $F.setExecutable(true, false)
+      - patterns:
+          - pattern: $PFP.fromString($S)
+          - metavariable-regex:
+              metavariable: $S
+              regex: '^"[rwx-]{7}w[rwx-]"$'
+
+  - id: kisa-sf-04-java-weak-crypto-algorithm
+    languages: [java]
+    severity: ERROR
+    message: >-
+      취약한 암호화 알고리즘 사용 (KISA-SF-04). MD5·SHA-1·DES·RC4·AES/ECB는 안전성이 깨진 알고리즘입니다. SHA-256
+      이상, AES/GCM 등 현행 권고 알고리즘으로 교체하세요.
+    metadata:
+      kisa_code: KISA-SF-04
+      kisa_name: 취약한 암호화 알고리즘 사용
+      cwe: CWE-327
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: MessageDigest.getInstance($ALG, ...)
+              - pattern: Cipher.getInstance($ALG, ...)
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: (?i)^"(md2|md4|md5|sha-?1|des(/.*)?|desede(/.*)?|rc2(/.*)?|rc4|arcfour|blowfish(/.*)?|aes/ecb/.*)"$
+      - pattern: DigestUtils.md5Hex(...)
+      - pattern: DigestUtils.md5(...)
+      - pattern: DigestUtils.sha1Hex(...)
+      - pattern: DigestUtils.sha1(...)
+
+  - id: kisa-sf-06-java-hardcoded-secret
+    languages: [java]
+    severity: ERROR
+    message: >-
+      하드코드된 중요정보 (KISA-SF-06). 비밀번호·키·토큰이 소스에 상수로 들어 있습니다. 환경변수나 시크릿 저장소에서 읽으세요.
+    metadata:
+      kisa_code: KISA-SF-06
+      kisa_name: 하드코드된 중요정보
+      cwe: CWE-798
+    # 이름이 비밀 정보를 가리키는 변수에 리터럴을 넣거나, getConnection/PasswordAuthentication의
+    # 비밀번호 자리에 리터럴을 직접 쓴 경우. 빈 문자열은 값이 아니므로 제외.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: String $NAME = "...";
+              - pattern: $NAME = "...";
+          - metavariable-regex:
+              metavariable: $NAME
+              regex: (?i)^[a-z_]*(password|passwd|pwd|secret|api_?key|access_?key|private_?key|token)[a-z_0-9]*$
+          - pattern-not: String $NAME = "";
+          - pattern-not: $NAME = "";
+      - pattern: DriverManager.getConnection($URL, $USER, "...")
+      - pattern: new PasswordAuthentication($USER, "...".toCharArray())
+
+  - id: kisa-sf-07-java-insufficient-key-length
+    languages: [java]
+    severity: WARNING
+    message: >-
+      충분하지 않은 키 길이 사용 (KISA-SF-07). 2048비트 미만 RSA/DSA 키는 전수 대입으로 복호화될 수 있습니다. 2048비트 이상(권장
+      3072+)으로 생성하세요.
+    metadata:
+      kisa_code: KISA-SF-07
+      kisa_name: 충분하지 않은 키 길이 사용
+      cwe: CWE-326
+    patterns:
+      - pattern-either:
+          - pattern: $KPG.initialize($BITS, ...)
+          - pattern: new RSAKeyGenParameterSpec($BITS, ...)
+      - metavariable-comparison:
+          metavariable: $BITS
+          comparison: $BITS < 2048
+
+  - id: kisa-sf-08-java-insecure-random
+    languages: [java]
+    severity: ERROR
+    message: >-
+      적절하지 않은 난수 값 사용 (KISA-SF-08). java.util.Random·Math.random은 예측 가능한 의사난수라 토큰·세션 값 생성에
+      쓰면 안 됩니다. SecureRandom을 사용하세요.
+    metadata:
+      kisa_code: KISA-SF-08
+      kisa_name: 적절하지 않은 난수 값 사용
+      cwe: CWE-338
+    # Python·C 룰과 같은 기준 — 보안 용도로 쓰이는 이름에 대입될 때만 잡는다.
+    patterns:
+      - pattern-either:
+          - pattern: $NAME = <... Math.random() ...>;
+          - pattern: $NAME = <... new Random() ...>;
+          - pattern: $NAME = <... new Random(...) ...>;
+          - pattern: $NAME = <... $R.nextInt(...) ...>;
+          - pattern: $NAME = <... $R.nextLong() ...>;
+          - pattern: $NAME = <... $R.nextDouble() ...>;
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^[a-z_]*(token|session|otp|password|passwd|secret|nonce|salt|key|reset|auth)[a-z_0-9]*$
+
+  - id: kisa-sf-11-java-improper-cert-validation
+    languages: [java]
+    severity: ERROR
+    message: >-
+      부적절한 인증서 유효성 검증 (KISA-SF-11). 인증서·호스트명 검증을 무력화하는 TrustManager/HostnameVerifier입니다.
+      기본 검증을 유지하고 신뢰 저장소를 지정하세요.
+    metadata:
+      kisa_code: KISA-SF-11
+      kisa_name: 부적절한 인증서 유효성 검증
+      cwe: CWE-295
+    pattern-either:
+      - pattern: |
+          public void checkServerTrusted(...) { }
+      - pattern: |
+          public $T[] getAcceptedIssuers() { return null; }
+      - pattern: |
+          public boolean verify(...) { return true; }
+      - pattern: $C.setHostnameVerifier(NoopHostnameVerifier.INSTANCE)
+      - pattern: $C.setHostnameVerifier(SSLConnectionSocketFactory.ALLOW_ALL_HOSTNAME_VERIFIER)
+      - pattern: $C.setHostnameVerifier(($H, $S) -> true)
+      - pattern: $B.hostnameVerifier(($H, $S) -> true)
+      - pattern: $B.loadTrustMaterial(..., new TrustAllStrategy())
+      - pattern: $B.loadTrustMaterial(..., TrustAllStrategy.INSTANCE)
+      - pattern: $B.loadTrustMaterial(..., ($CH, $AT) -> true)
+
+  - id: kisa-sf-12-java-persistent-sensitive-cookie
+    languages: [java]
+    severity: WARNING
+    message: >-
+      사용자 하드디스크에 저장되는 쿠키를 통한 정보 노출 (KISA-SF-12). 인증·세션 값을 만료(setMaxAge)를 준 쿠키에 담으면 디스크에 남아
+      로컬 접근자에게 노출됩니다. 만료를 지정하지 않은 세션 쿠키로 두세요.
+    metadata:
+      kisa_code: KISA-SF-12
+      kisa_name: 사용자 하드디스크에 저장되는 쿠키를 통한 정보 노출
+      cwe: CWE-539
+    patterns:
+      - pattern: |
+          $C = new Cookie($NAME, ...);
+          ...
+          $C.setMaxAge($AGE);
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^"[a-z_-]*(token|session|auth|password|passwd|secret|remember)[a-z_-]*"$
+      - metavariable-comparison:
+          metavariable: $AGE
+          comparison: $AGE > 0
+
+  - id: kisa-sf-13-java-secret-in-comment
+    languages: [java]
+    severity: WARNING
+    message: >-
+      주석문 안에 포함된 시스템 주요정보 (KISA-SF-13). 주석에 적힌 비밀번호·키는 소스 열람만으로 노출됩니다. 값은 지우고 시크릿 저장소·환경변수
+      위치만 남기세요.
+    metadata:
+      kisa_code: KISA-SF-13
+      kisa_name: 주석문 안에 포함된 시스템 주요정보
+      cwe: CWE-615
+    # AST는 주석을 보지 못하므로 원문 정규식으로 잡는다 (Python·C 룰과 같은 원칙). // 와 /* 로
+    # 시작하는 줄만 — 블록 주석 둘째 줄 이후(' * password = x')는 코드와 구분할 수 없어 제외.
+    patterns:
+      - pattern-regex: '(//|/\*).*?(?i:password|passwd|pwd|secret|api[_-]?key|token)\s*[:=]\s*\S+'
+
+  - id: kisa-sf-14-java-unsalted-password-hash
+    languages: [java]
+    severity: ERROR
+    message: >-
+      솔트 없이 일방향 해쉬 함수 사용 (KISA-SF-14). 솔트 없는 해시는 레인보우 테이블로 원문이 복원됩니다. bcrypt·PBKDF2 등 솔트를
+      포함한 적응형 해시를 사용하세요.
+    metadata:
+      kisa_code: KISA-SF-14
+      kisa_name: 솔트 없이 일방향 해쉬 함수 사용
+      cwe: CWE-759
+    # digest 전에 update(salt)가 있으면 솔트를 준 것으로 보고 제외한다.
+    patterns:
+      - pattern-either:
+          - pattern: $MD.digest($PW.getBytes(...))
+          - pattern: DigestUtils.sha256Hex($PW)
+          - pattern: DigestUtils.sha512Hex($PW)
+          - pattern: DigestUtils.sha256($PW)
+      - metavariable-regex:
+          metavariable: $PW
+          regex: (?i)^[a-z_]*(password|passwd|pwd)[a-z_0-9]*$
+      - pattern-not-inside: |
+          $MD.update($SALT);
+          ...
+          $MD.digest($PW.getBytes(...));

@@ -1,0 +1,64 @@
+# KISA 제5절 코드오류 (CE) — JavaScript/TypeScript 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-ce-01-js-null-dereference
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Null Pointer 역참조 (KISA-CE-01). 요청 속성(req.query.x 등)과 DOM 조회 결과는 없을 수 있는데 바로 메서드·속성을
+      사용하고 있습니다. 존재 여부를 확인하거나 옵셔널 체이닝(?.)을 쓰세요.
+    metadata:
+      kisa_code: KISA-CE-01
+      kisa_name: Null Pointer 역참조
+      cwe: CWE-476
+    # C·Java 룰과 같은 축소 범위 — 값을 얻은 자리에서 바로 역참조할 때만.
+    pattern-either:
+      - pattern: $REQ.query.$P.$M(...)
+      - pattern: $REQ.body.$P.$M(...)
+      - pattern: $REQ.params.$P.$M(...)
+      - pattern: $REQ.headers.$H.$M(...)
+      - pattern: $REQ.cookies.$C.$M(...)
+      - pattern: document.getElementById(...).$PROP = $V
+      - pattern: document.querySelector(...).$PROP = $V
+      - pattern: document.getElementById(...).$M(...)
+      - pattern: document.querySelector(...).$M(...)
+
+  - id: kisa-ce-02-js-resource-leak
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      부적절한 자원 해제 (KISA-CE-02). fs.openSync로 연 디스크립터를 같은 함수에서 closeSync 하지 않습니다. 모든 경로에서
+      닫거나 fs.promises API를 사용하세요.
+    metadata:
+      kisa_code: KISA-CE-02
+      kisa_name: 부적절한 자원 해제
+      cwe: CWE-772
+    patterns:
+      - pattern: $FD = fs.openSync(...)
+      - pattern-not-inside: |
+          $FD = fs.openSync(...);
+          ...
+          fs.closeSync($FD);
+      - pattern-not-inside: |
+          $FD = fs.openSync(...);
+          ...
+          return $FD;
+
+  - id: kisa-ce-05-js-unsafe-deserialization
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      신뢰할 수 없는 데이터의 역직렬화 (KISA-CE-05). node-serialize.unserialize·전체 스키마 YAML 로드는 복원 과정에서
+      코드가 실행됩니다. JSON.parse나 기본(safe) 스키마를 사용하세요.
+    metadata:
+      kisa_code: KISA-CE-05
+      kisa_name: 신뢰할 수 없는 데이터의 역직렬화
+      cwe: CWE-502
+    pattern-either:
+      - pattern: $S.unserialize(...)
+      - pattern: unserialize(...)
+      - pattern: 'yaml.load($X, {..., schema: yaml.DEFAULT_FULL_SCHEMA, ...})'
+      - pattern: 'yaml.load($X, {..., schema: DEFAULT_FULL_SCHEMA, ...})'

@@ -1,0 +1,312 @@
+# KISA 제1절 입력데이터 검증 및 표현 (IV) — Java 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-iv-01-java-sql-injection
+    languages: [java]
+    severity: ERROR
+    message: >-
+      SQL 삽입 (KISA-IV-01). 외부 입력이 섞인 문자열을 그대로 질의로 실행하고 있습니다. 문자열 결합·String.format 대신
+      PreparedStatement의 ? 바인딩(또는 JPA 파라미터)을 사용하세요.
+    metadata:
+      kisa_code: KISA-IV-01
+      kisa_name: SQL 삽입
+      cwe: CWE-89
+    # 결합('...' + x)·String.format으로 만든 질의를 실행 메서드에 넘기는 형태와, 결합한 변수를
+    # 뒤에서 넘기는 2문장 형태를 잡는다. 결합 없이 변수만 넘기면(다른 곳에서 조립) 못 잡는다.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $ST.$EXEC(<... "..." + $X ...>, ...)
+              - pattern: $ST.$EXEC(String.format(...), ...)
+              - pattern: |
+                  $SQL = <... "..." + $X ...>;
+                  ...
+                  $ST.$EXEC($SQL, ...);
+              - pattern: |
+                  String $SQL = <... "..." + $X ...>;
+                  ...
+                  $ST.$EXEC($SQL, ...);
+          - metavariable-regex:
+              metavariable: $EXEC
+              regex: ^(executeQuery|executeUpdate|execute|addBatch|prepareStatement|prepareCall|query|queryForObject|queryForList|queryForMap|update|batchUpdate|createQuery|createNativeQuery|createSQLQuery)$
+
+  - id: kisa-iv-02-java-code-injection
+    languages: [java]
+    severity: ERROR
+    message: >-
+      코드삽입 (KISA-IV-02). 외부에서 들어온 값이 ScriptEngine.eval로 코드로 해석되어 실행될 수 있습니다. 상수 스크립트만
+      허용하거나 eval을 제거하세요.
+    metadata:
+      kisa_code: KISA-IV-02
+      kisa_name: 코드삽입
+      cwe: CWE-94
+    # 상수 문자열만 넘기는 호출은 외부 입력이 아니므로 제외한다 (오탐 억제).
+    patterns:
+      - pattern: $ENGINE.eval($X, ...)
+      - pattern-not: $ENGINE.eval("...", ...)
+
+  - id: kisa-iv-03-java-path-manipulation
+    languages: [java]
+    severity: ERROR
+    message: >-
+      경로 조작 및 자원 삽입 (KISA-IV-03). 요청 파라미터로 만든 경로를 그대로 열고 있습니다. 허용된 디렉토리 기준으로
+      정규화(toRealPath)한 뒤 그 안에 있는지 확인하세요.
+    metadata:
+      kisa_code: KISA-IV-03
+      kisa_name: 경로 조작 및 자원 삽입
+      cwe: CWE-22
+    # request.getParameter를 File/Paths/스트림 생성자에 직접 넣거나 상수 경로에 결합하는 형태.
+    pattern-either:
+      - pattern: new File(..., $REQ.getParameter(...))
+      - pattern: new File(<... "..." + $REQ.getParameter(...) ...>)
+      - pattern: new FileInputStream(<... $REQ.getParameter(...) ...>)
+      - pattern: new FileOutputStream(<... $REQ.getParameter(...) ...>)
+      - pattern: Paths.get(..., $REQ.getParameter(...))
+      - pattern: Paths.get(<... "..." + $REQ.getParameter(...) ...>)
+      - pattern: new File(..., "..." + $X)
+      - pattern: new FileInputStream("..." + $X)
+      - pattern: new FileOutputStream("..." + $X)
+      - pattern: Paths.get("..." + $X)
+
+  - id: kisa-iv-04-java-xss
+    languages: [java]
+    severity: ERROR
+    message: >-
+      크로스사이트 스크립트 (KISA-IV-04). 요청 파라미터를 이스케이프 없이 응답에 그대로 씁니다. HTML
+      이스케이프(StringEscapeUtils 등)나 템플릿의 자동 이스케이프를 사용하세요.
+    metadata:
+      kisa_code: KISA-IV-04
+      kisa_name: 크로스사이트 스크립트
+      cwe: CWE-79
+    # getParameter가 응답 writer/outputStream에 직접 들어가는 형태만. 변수를 거쳐 조립하면
+    # 못 잡는다 (taint 과제). JSP <%= %>는 Java 파서 대상이 아니라 다루지 않는다.
+    pattern-either:
+      - pattern: $RESP.getWriter().$P(<... $REQ.getParameter(...) ...>)
+      - pattern: $RESP.getOutputStream().$P(<... $REQ.getParameter(...) ...>)
+      - pattern: |
+          $W = $RESP.getWriter();
+          ...
+          $W.$P(<... $REQ.getParameter(...) ...>);
+      - pattern: |
+          PrintWriter $W = $RESP.getWriter();
+          ...
+          $W.$P(<... $REQ.getParameter(...) ...>);
+
+  - id: kisa-iv-05-java-os-command-injection
+    languages: [java]
+    severity: ERROR
+    message: >-
+      운영체제 명령어 삽입 (KISA-IV-05). 변수로 조립한 문자열을 셸 명령으로 실행하고 있습니다. ProcessBuilder에 인자를 배열로 분리해
+      넘기고 외부 입력은 허용 목록으로 검증하세요.
+    metadata:
+      kisa_code: KISA-IV-05
+      kisa_name: 운영체제 명령어 삽입
+      cwe: CWE-78
+    # Runtime.exec(비리터럴)과 셸(-c)을 거쳐 문자열 한 덩어리를 실행하는 ProcessBuilder만 잡는다.
+    # 상수 명령·배열 인자 형태는 제외 (오탐 억제).
+    patterns:
+      - pattern-either:
+          - pattern: $RT.exec($CMD, ...)
+          - pattern: new ProcessBuilder("sh", "-c", $CMD)
+          - pattern: new ProcessBuilder("/bin/sh", "-c", $CMD)
+          - pattern: new ProcessBuilder("bash", "-c", $CMD)
+          - pattern: new ProcessBuilder("/bin/bash", "-c", $CMD)
+          - pattern: new ProcessBuilder("cmd", "/c", $CMD)
+          - pattern: new ProcessBuilder("cmd.exe", "/c", $CMD)
+      - pattern-not: $RT.exec("...", ...)
+      - pattern-not: $RT.exec(new String[]{"...", ...}, ...)
+      - pattern-not: new ProcessBuilder(..., "-c", "...")
+      - pattern-not: new ProcessBuilder(..., "/c", "...")
+
+  - id: kisa-iv-06-java-dangerous-file-upload
+    languages: [java]
+    severity: ERROR
+    message: >-
+      위험한 형식 파일 업로드 (KISA-IV-06). 업로드 파일의 원래 이름(getOriginalFilename)을 그대로 저장 경로에 씁니다. 확장자를
+      허용 목록으로 검증하고 서버가 만든 이름으로 저장하세요.
+    metadata:
+      kisa_code: KISA-IV-06
+      kisa_name: 위험한 형식 파일 업로드
+      cwe: CWE-434
+    pattern-either:
+      - pattern: new File(..., $FILE.getOriginalFilename())
+      - pattern: new File(<... "..." + $FILE.getOriginalFilename() ...>)
+      - pattern: Paths.get(..., $FILE.getOriginalFilename())
+      - pattern: $P.resolve($FILE.getOriginalFilename())
+      - pattern: |
+          $T $N = $FILE.getOriginalFilename();
+          ...
+          new File(..., $N);
+      - pattern: |
+          $T $N = $FILE.getOriginalFilename();
+          ...
+          $P.resolve($N);
+
+  - id: kisa-iv-07-java-open-redirect
+    languages: [java]
+    severity: WARNING
+    message: >-
+      신뢰되지 않는 URL 주소로 자동접속 연결 (KISA-IV-07). 요청 파라미터를 검증 없이 리다이렉트 대상으로 쓰면 피싱·악성 사이트 유도에
+      악용됩니다. 허용 목록으로 대상 경로를 제한하세요.
+    metadata:
+      kisa_code: KISA-IV-07
+      kisa_name: 신뢰되지 않는 URL 주소로 자동접속 연결
+      cwe: CWE-601
+    pattern-either:
+      - pattern: $RESP.sendRedirect(<... $REQ.getParameter(...) ...>)
+      - pattern: return "redirect:" + $REQ.getParameter(...);
+      - pattern: new RedirectView(<... $REQ.getParameter(...) ...>, ...)
+      - pattern: new ModelAndView("redirect:" + $REQ.getParameter(...), ...)
+
+  - id: kisa-iv-08-java-xxe
+    languages: [java]
+    severity: ERROR
+    message: >-
+      부적절한 XML 외부개체 참조 (KISA-IV-08). XML 파서가 외부 개체(DTD) 참조를 허용한 채 생성됐습니다. disallow-
+      doctype-decl 등으로 외부 개체를 끄세요.
+    metadata:
+      kisa_code: KISA-IV-08
+      kisa_name: 부적절한 XML 외부개체 참조
+      cwe: CWE-611
+    # 팩토리를 만든 뒤 같은 블록에서 외부 개체 비활성화 호출이 하나도 없을 때 잡는다.
+    patterns:
+      - pattern-either:
+          - pattern: $T $F = DocumentBuilderFactory.newInstance(...);
+          - pattern: $T $F = SAXParserFactory.newInstance(...);
+          - pattern: $T $F = XMLInputFactory.newInstance(...);
+          - pattern: $T $F = XMLInputFactory.newFactory(...);
+          - pattern: $T $F = TransformerFactory.newInstance(...);
+          - pattern: $T $F = new SAXReader(...);
+      - pattern-not-inside: |
+          $T $F = $NEW;
+          ...
+          $F.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+      - pattern-not-inside: |
+          $T $F = $NEW;
+          ...
+          $F.setFeature("http://xml.org/sax/features/external-general-entities", false);
+      - pattern-not-inside: |
+          $T $F = $NEW;
+          ...
+          $F.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+      - pattern-not-inside: |
+          $T $F = $NEW;
+          ...
+          $F.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
+      - pattern-not-inside: |
+          $T $F = $NEW;
+          ...
+          $F.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+      - pattern-not-inside: |
+          $T $F = $NEW;
+          ...
+          $F.setExpandEntityReferences(false);
+
+  - id: kisa-iv-10-java-ldap-injection
+    languages: [java]
+    severity: ERROR
+    message: >-
+      LDAP 삽입 (KISA-IV-10). 외부 입력을 결합해 LDAP 필터를 만들고 있습니다. 필터 인자({0}) 바인딩이나 이스케이프를 사용하세요.
+    metadata:
+      kisa_code: KISA-IV-10
+      kisa_name: LDAP 삽입
+      cwe: CWE-90
+    pattern-either:
+      - pattern: $CTX.search($BASE, <... "..." + $X ...>, ...)
+      - pattern: $CTX.search($BASE, String.format(...), ...)
+      - pattern: |
+          $T $FILTER = <... "..." + $X ...>;
+          ...
+          $CTX.search($BASE, $FILTER, ...);
+      - pattern: |
+          $FILTER = <... "..." + $X ...>;
+          ...
+          $CTX.search($BASE, $FILTER, ...);
+      - pattern: new EqualsFilter($ATTR, $REQ.getParameter(...))
+
+  - id: kisa-iv-11-java-csrf-disabled
+    languages: [java]
+    severity: WARNING
+    message: >-
+      크로스사이트 요청 위조 (KISA-IV-11). Spring Security의 CSRF 보호를 통째로 끄고 있습니다. 꼭 필요한 예외가 아니라면
+      제거하고 기본 보호를 유지하세요.
+    metadata:
+      kisa_code: KISA-IV-11
+      kisa_name: 크로스사이트 요청 위조
+      cwe: CWE-352
+    pattern-either:
+      - pattern: $HTTP.csrf().disable()
+      - pattern: $HTTP.csrf($C -> $C.disable())
+      - pattern: $HTTP.csrf(AbstractHttpConfigurer::disable)
+
+  - id: kisa-iv-12-java-ssrf
+    languages: [java]
+    severity: ERROR
+    message: >-
+      서버사이드 요청 위조 (KISA-IV-12). 요청 파라미터로 만든 주소로 서버가 요청을 보냅니다. 허용 목록으로 대상 호스트를 제한하세요.
+    metadata:
+      kisa_code: KISA-IV-12
+      kisa_name: 서버사이드 요청 위조
+      cwe: CWE-918
+    pattern-either:
+      - pattern: new URL(<... $REQ.getParameter(...) ...>)
+      - pattern: new URL("..." + $X)
+      - pattern: URI.create(<... $REQ.getParameter(...) ...>)
+      - pattern: $RT.getForObject(<... $REQ.getParameter(...) ...>, ...)
+      - pattern: $RT.getForObject("..." + $X, ...)
+      - pattern: $RT.getForEntity("..." + $X, ...)
+      - pattern: $RT.exchange("..." + $X, ...)
+      - pattern: $CLIENT.get().uri(<... $REQ.getParameter(...) ...>)
+      - pattern: $CLIENT.get().uri("..." + $X)
+
+  - id: kisa-iv-13-java-http-response-splitting
+    languages: [java]
+    severity: WARNING
+    message: >-
+      HTTP 응답분할 (KISA-IV-13). 요청 파라미터가 응답 헤더·쿠키 값에 그대로 들어갑니다. 개행(CR/LF)을 제거하거나 허용 문자로
+      검증하세요.
+    metadata:
+      kisa_code: KISA-IV-13
+      kisa_name: HTTP 응답분할
+      cwe: CWE-113
+    pattern-either:
+      - pattern: $RESP.setHeader($N, <... $REQ.getParameter(...) ...>)
+      - pattern: $RESP.addHeader($N, <... $REQ.getParameter(...) ...>)
+      - pattern: new Cookie($N, $REQ.getParameter(...))
+      - pattern: new Cookie($N, "..." + $REQ.getParameter(...))
+
+  - id: kisa-iv-15-java-security-decision-on-input
+    languages: [java]
+    severity: ERROR
+    message: >-
+      보안기능 결정에 사용되는 부적절한 입력값 (KISA-IV-15). 요청 파라미터·헤더 값(role, isAdmin 등)을 그대로 권한 판단에 쓰고
+      있습니다. 권한은 서버 세션·DB의 값으로 결정하세요.
+    metadata:
+      kisa_code: KISA-IV-15
+      kisa_name: 보안기능 결정에 사용되는 부적절한 입력값
+      cwe: CWE-807
+    # 이름 기준(role/admin/privilege…) + '리터럴과 동등 비교 또는 진리값 분기'일 때만. 화면 표시용
+    # 사용은 잡지 않는다. 가격류(price/amount)는 이름만으로 판정할 수 없어 제외 (docs/decisions.md).
+    patterns:
+      - pattern-either:
+          - pattern: $REQ.getParameter($NAME).equals(...)
+          - pattern: $REQ.getParameter($NAME).equalsIgnoreCase(...)
+          - pattern: '"...".equals($REQ.getParameter($NAME))'
+          - pattern: '"...".equalsIgnoreCase($REQ.getParameter($NAME))'
+          - pattern: Boolean.parseBoolean($REQ.getParameter($NAME))
+          - pattern: |
+              $T $X = $REQ.getParameter($NAME);
+              ...
+              if (<... $X.equals("...") ...>) { ... }
+          - pattern: |
+              $T $X = $REQ.getParameter($NAME);
+              ...
+              if (<... "...".equals($X) ...>) { ... }
+          - pattern: $REQ.getHeader($NAME).equals(...)
+          - pattern: '"...".equals($REQ.getHeader($NAME))'
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^"[a-z_-]*(role|is_?admin|admin|privilege|permission|authorized|auth_?level|user_?type|is_?staff|superuser)[a-z_-]*"$

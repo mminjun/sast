@@ -58,21 +58,19 @@ CATEGORY_COUNTS = {'IV': 17, 'SF': 16, 'TS': 2, 'EH': 3, 'CE': 5, 'EN': 4, 'AA':
 SEVERITY_COUNTS = {'HIGH': 26, 'MEDIUM': 20, 'LOW': 3}
 
 # 실탐지 룰이 붙은 항목 (선정 근거는 docs/decisions.md — 8/27 최초 13개, 8/29 확장,
-# 9/4 C 룰로 6개 추가: IV-16, IV-17, SF-03, TS-01, CE-01, CE-03).
+# 9/4 C 룰로 6개 추가: IV-16, IV-17, SF-03, TS-01, CE-01, CE-03,
+# 9/5 Java·JS 룰로 12개 추가: IV-04, IV-06, IV-08, IV-10, IV-13, IV-15, SF-01, SF-10,
+# EN-01, EN-03, EN-04, AA-01).
 IMPLEMENTED_CODES = {
-    'KISA-IV-01', 'KISA-IV-02', 'KISA-IV-03', 'KISA-IV-05', 'KISA-IV-07', 'KISA-IV-11',
-    'KISA-IV-12', 'KISA-IV-16', 'KISA-IV-17',
-    'KISA-SF-03', 'KISA-SF-04', 'KISA-SF-06', 'KISA-SF-07', 'KISA-SF-08', 'KISA-SF-11',
-    'KISA-SF-12', 'KISA-SF-13', 'KISA-SF-14',
+    'KISA-IV-01', 'KISA-IV-02', 'KISA-IV-03', 'KISA-IV-04', 'KISA-IV-05', 'KISA-IV-06',
+    'KISA-IV-07', 'KISA-IV-08', 'KISA-IV-10', 'KISA-IV-11', 'KISA-IV-12', 'KISA-IV-13',
+    'KISA-IV-15', 'KISA-IV-16', 'KISA-IV-17',
+    'KISA-SF-01', 'KISA-SF-03', 'KISA-SF-04', 'KISA-SF-06', 'KISA-SF-07', 'KISA-SF-08',
+    'KISA-SF-10', 'KISA-SF-11', 'KISA-SF-12', 'KISA-SF-13', 'KISA-SF-14',
     'KISA-TS-01',
     'KISA-CE-01', 'KISA-CE-02', 'KISA-CE-03', 'KISA-CE-05', 'KISA-EH-01', 'KISA-EH-03',
-    'KISA-EN-02',
-    'KISA-AA-02',
-}
-# Python·C 두 언어 모두에서 잡는 항목 — SFR-010 "룰 추가만으로 언어 확장"의 실증.
-SHARED_LANGUAGE_CODES = {
-    'KISA-IV-05', 'KISA-SF-04', 'KISA-SF-06', 'KISA-SF-08', 'KISA-SF-13', 'KISA-CE-02',
-    'KISA-AA-02',
+    'KISA-EN-01', 'KISA-EN-02', 'KISA-EN-03', 'KISA-EN-04',
+    'KISA-AA-01', 'KISA-AA-02',
 }
 # 취약 샘플에서 나와야 하는 룰별 건수. 총 31건.
 EXPECTED_SAMPLE_FINDINGS = {
@@ -90,6 +88,42 @@ EXPECTED_C_SAMPLE_FINDINGS = {
     'KISA-TS-01': 2,
     'KISA-CE-01': 2, 'KISA-CE-02': 1, 'KISA-CE-03': 3,
     'KISA-AA-02': 2,
+}
+# Java 취약 샘플(vulnerable.java). 총 49건 / 35룰 (SFR-011, 9/5).
+EXPECTED_JAVA_SAMPLE_FINDINGS = {
+    'KISA-IV-01': 2, 'KISA-IV-02': 1, 'KISA-IV-03': 2, 'KISA-IV-04': 2, 'KISA-IV-05': 2,
+    'KISA-IV-06': 1, 'KISA-IV-07': 1, 'KISA-IV-08': 1, 'KISA-IV-10': 1, 'KISA-IV-11': 1,
+    'KISA-IV-12': 2, 'KISA-IV-13': 2, 'KISA-IV-15': 2,
+    'KISA-SF-01': 1, 'KISA-SF-03': 2, 'KISA-SF-04': 2, 'KISA-SF-06': 2, 'KISA-SF-07': 1,
+    'KISA-SF-08': 2, 'KISA-SF-11': 2, 'KISA-SF-12': 1, 'KISA-SF-13': 1, 'KISA-SF-14': 1,
+    'KISA-TS-01': 1,
+    'KISA-CE-01': 2, 'KISA-CE-02': 1, 'KISA-CE-05': 1, 'KISA-EH-01': 2, 'KISA-EH-03': 1,
+    'KISA-EN-01': 1, 'KISA-EN-02': 1, 'KISA-EN-03': 1, 'KISA-EN-04': 1,
+    'KISA-AA-01': 1, 'KISA-AA-02': 1,
+}
+# JavaScript 취약 샘플(vulnerable.js). 총 51건 / 30룰 (SFR-011, 9/5).
+EXPECTED_JS_SAMPLE_FINDINGS = {
+    'KISA-IV-01': 2, 'KISA-IV-02': 2, 'KISA-IV-03': 2, 'KISA-IV-04': 4, 'KISA-IV-05': 2,
+    'KISA-IV-06': 1, 'KISA-IV-07': 2, 'KISA-IV-08': 1, 'KISA-IV-10': 1, 'KISA-IV-12': 2,
+    'KISA-IV-13': 2, 'KISA-IV-15': 2,
+    'KISA-SF-03': 3, 'KISA-SF-04': 2, 'KISA-SF-06': 2, 'KISA-SF-07': 1, 'KISA-SF-08': 2,
+    'KISA-SF-10': 2, 'KISA-SF-11': 2, 'KISA-SF-12': 1, 'KISA-SF-13': 1, 'KISA-SF-14': 1,
+    'KISA-TS-01': 1,
+    'KISA-CE-01': 2, 'KISA-CE-02': 1, 'KISA-CE-05': 1, 'KISA-EH-01': 2, 'KISA-EH-03': 2,
+    'KISA-EN-02': 1,
+    'KISA-AA-02': 1,
+}
+# 언어별 취약 샘플과 룰 id의 언어 표기. 항목별 "어느 언어에서 잡히는가"는 위 기대 건수
+# 표에서 파생한다 — 표를 고치면 커버리지 시험도 같이 따라온다 (SFR-010, SFR-011).
+LANGUAGE_SAMPLES = {
+    '.py': ('vulnerable.py', EXPECTED_SAMPLE_FINDINGS, ''),
+    '.c': ('vulnerable.c', EXPECTED_C_SAMPLE_FINDINGS, '-c-'),
+    '.java': ('vulnerable.java', EXPECTED_JAVA_SAMPLE_FINDINGS, '-java-'),
+    '.js': ('vulnerable.js', EXPECTED_JS_SAMPLE_FINDINGS, '-js-'),
+}
+LANGUAGE_COVERAGE = {
+    code: {suffix for suffix, (_, expected, _) in LANGUAGE_SAMPLES.items() if code in expected}
+    for code in IMPLEMENTED_CODES
 }
 
 SEMGREP_AVAILABLE = shutil.which('semgrep') is not None
@@ -222,12 +256,17 @@ class SeedCatalogTests(TestCase):
         )
         self.assertEqual(implemented, IMPLEMENTED_CODES)
 
-    def test_item_can_carry_rules_for_several_languages(self):
-        """한 항목에 언어별 룰이 여러 개 붙는다 — 카탈로그는 언어 중립 (SFR-010)."""
-        for code in SHARED_LANGUAGE_CODES:
+    def test_item_carries_one_rule_per_language_it_covers(self):
+        """한 항목에 언어별 룰이 여러 개 붙는다 — 카탈로그는 언어 중립 (SFR-010).
+        룰 id의 언어 표기(-c-/-java-/-js-, Python은 없음)와 샘플 커버리지가 일치해야 한다."""
+        tags = {suffix: tag for suffix, (_, _, tag) in LANGUAGE_SAMPLES.items()}
+        for code, suffixes in LANGUAGE_COVERAGE.items():
             ids = DiagnosticRule.objects.get(code=code).semgrep_rule_ids
-            self.assertTrue(any('-c-' in rule_id for rule_id in ids), (code, ids))
-            self.assertTrue(any('-c-' not in rule_id for rule_id in ids), (code, ids))
+            languages = {
+                suffix for rule_id in ids for suffix, tag in tags.items()
+                if (tag and tag in rule_id) or (not tag and not any(t and t in rule_id for t in tags.values()))
+            }
+            self.assertEqual(languages, suffixes, (code, ids))
 
     def test_implemented_queryset_agrees_with_property(self):
         """쿼리셋 판정과 프로퍼티 판정이 갈라지면 필터 결과와 상세 표시가 어긋난다."""
@@ -1221,19 +1260,52 @@ class DetectionSampleTests(WorkspaceMixin, TestCase):
         self.assertEqual(
             list(Finding.objects.filter(run=run).values_list('file_path', 'rule_code')), [])
 
-    def test_shared_items_are_detected_in_both_languages(self):
-        """같은 진단 항목을 Python·C 룰이 각각 잡는다 — 언어 확장이 카탈로그·모델 변경
-        없이 룰 추가만으로 이뤄졌다는 실증 (SFR-010, SFR-011)."""
-        run = self.analyze('vulnerable.py', 'vulnerable.c')
+    def test_vulnerable_java_sample_triggers_every_java_rule(self):
+        """Java 룰 35개 정탐 (SFR-011, TST-005)."""
+        run = self.analyze('vulnerable.java')
         self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
 
-        for code in SHARED_LANGUAGE_CODES:
-            suffixes = {
-                Path(path).suffix
-                for path in Finding.objects.filter(run=run, rule_code=code)
-                                           .values_list('file_path', flat=True)
-            }
-            self.assertEqual(suffixes, {'.py', '.c'}, code)
+        counts = {}
+        for finding in Finding.objects.filter(run=run):
+            counts[finding.rule_code] = counts.get(finding.rule_code, 0) + 1
+        self.assertEqual(counts, EXPECTED_JAVA_SAMPLE_FINDINGS)
+
+    def test_safe_java_sample_produces_no_findings(self):
+        """Java 오탐 통제. safe.java에는 이름 기준 룰(IV-15·SF-01)이 걸리기 쉬운 케이스
+        (표시용 role, 검증 후 쓰는 price, /public·/login의 permitAll)가 일부러 들어 있다."""
+        run = self.analyze('safe.java')
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+        self.assertEqual(
+            list(Finding.objects.filter(run=run).values_list('file_path', 'rule_code')), [])
+
+    def test_vulnerable_js_sample_triggers_every_js_rule(self):
+        """JavaScript 룰 30개 정탐 (SFR-011, TST-005)."""
+        run = self.analyze('vulnerable.js')
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+
+        counts = {}
+        for finding in Finding.objects.filter(run=run):
+            counts[finding.rule_code] = counts.get(finding.rule_code, 0) + 1
+        self.assertEqual(counts, EXPECTED_JS_SAMPLE_FINDINGS)
+
+    def test_safe_js_sample_produces_no_findings(self):
+        """JavaScript 오탐 통제 (IV-15의 표시용 role·검증 후 price 케이스 포함)."""
+        run = self.analyze('safe.js')
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+        self.assertEqual(
+            list(Finding.objects.filter(run=run).values_list('file_path', 'rule_code')), [])
+
+    def test_each_item_is_detected_in_every_language_it_has_rules_for(self):
+        """네 언어 취약 샘플을 한 번에 분석하면 항목별로 해당 언어 파일에서만, 그리고 전부
+        잡힌다 — 언어 확장이 카탈로그·모델 변경 없이 룰 추가만으로 이뤄졌다는 실증
+        (SFR-010, SFR-011). 기대 커버리지는 언어별 기대 건수 표에서 파생한다."""
+        run = self.analyze(*[name for name, _, _ in LANGUAGE_SAMPLES.values()])
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+
+        detected = {}
+        for path, code in Finding.objects.filter(run=run).values_list('file_path', 'rule_code'):
+            detected.setdefault(code, set()).add(Path(path).suffix)
+        self.assertEqual(detected, LANGUAGE_COVERAGE)
 
     def test_catalog_severity_overrides_tool_severity(self):
         """도구 등급과 카탈로그 등급이 실제로 충돌하는 두 항목으로 확인한다 (QLT-004)."""

@@ -1,0 +1,45 @@
+# KISA 제4절 에러처리 (EH) — JavaScript/TypeScript 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-eh-01-js-error-message-disclosure
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      오류 메시지 정보노출 (KISA-EH-01). err.stack/err.message가 응답으로 나가면 내부 경로·구조가 노출됩니다. 일반화된 메시지를
+      주고 상세는 서버 로그에만 남기세요.
+    metadata:
+      kisa_code: KISA-EH-01
+      kisa_name: 오류 메시지 정보노출
+      cwe: CWE-209
+    pattern-either:
+      - pattern: $RES.send(<... $E.stack ...>)
+      - pattern: $RES.status(...).send(<... $E.stack ...>)
+      - pattern: $RES.json(<... $E.stack ...>)
+      - pattern: $RES.status(...).json(<... $E.stack ...>)
+      - pattern: $RES.end(<... $E.stack ...>)
+      - pattern: $RES.status(...).send(<... $E.message ...>)
+      - pattern: '$RES.status(...).json({..., $K: $E.message, ...})'
+      - pattern: '$RES.json({..., $K: $E.message, ...})'
+
+  - id: kisa-eh-03-js-improper-exception-handling
+    languages: [javascript, typescript]
+    severity: INFO
+    message: >-
+      부적절한 예외 처리 (KISA-EH-03). 예외를 잡고 아무것도 하지 않으면(빈 catch, .catch(() => {})) 오류가 숨겨집니다.
+      로그를 남기거나 다시 던지세요.
+    metadata:
+      kisa_code: KISA-EH-03
+      kisa_name: 부적절한 예외 처리
+      cwe: CWE-390
+    pattern-either:
+      - pattern: |
+          try { ... } catch ($E) { }
+      - pattern: |
+          try { ... } catch { }
+      - pattern: '$P.catch(() => {})'
+      - pattern: '$P.catch(($E) => {})'
+      - pattern: '$P.catch(function($E) {})'
+      - pattern: '$P.catch(function() {})'

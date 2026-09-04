@@ -1,0 +1,52 @@
+# KISA 제7절 API 오용 (AA) — Java 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-aa-01-java-dns-based-decision
+    languages: [java]
+    severity: WARNING
+    message: >-
+      DNS lookup에 의존한 보안결정 (KISA-AA-01). DNS 역조회 결과(호스트명)로 신뢰 여부를 판단하면 DNS 스푸핑으로 우회됩니다. IP
+      주소나 인증서 기반으로 판단하세요.
+    metadata:
+      kisa_code: KISA-AA-01
+      kisa_name: DNS lookup에 의존한 보안결정
+      cwe: CWE-350
+    pattern-either:
+      - pattern: $ADDR.getHostName().equals(...)
+      - pattern: $ADDR.getHostName().endsWith(...)
+      - pattern: $ADDR.getHostName().contains(...)
+      - pattern: $ADDR.getCanonicalHostName().equals(...)
+      - pattern: $ADDR.getCanonicalHostName().endsWith(...)
+      - pattern: $REQ.getRemoteHost().equals(...)
+      - pattern: $REQ.getRemoteHost().endsWith(...)
+      - pattern: |
+          $T $H = $ADDR.getHostName();
+          ...
+          if (<... $H.$M(...) ...>) { ... }
+      - pattern: |
+          $T $H = $ADDR.getCanonicalHostName();
+          ...
+          if (<... $H.$M(...) ...>) { ... }
+
+  - id: kisa-aa-02-java-vulnerable-api
+    languages: [java]
+    severity: WARNING
+    message: >-
+      취약한 API 사용 (KISA-AA-02). Thread.stop/suspend/resume/destroy·runFinalizersOnExit는
+      안전하지 않아 폐기된 API입니다. interrupt와 협조적 종료로 바꾸세요.
+    metadata:
+      kisa_code: KISA-AA-02
+      kisa_name: 취약한 API 사용
+      cwe: CWE-477
+    # (Thread $T)로 타입을 지정해 다른 객체의 stop()/destroy()는 잡지 않는다 (오탐 억제).
+    # 경계: 다른 KISA 항목에 속하는 위험 API는 여기서 다시 잡지 않는다 (QLT-004).
+    pattern-either:
+      - pattern: (Thread $T).stop()
+      - pattern: (Thread $T).suspend()
+      - pattern: (Thread $T).resume()
+      - pattern: (Thread $T).destroy()
+      - pattern: System.runFinalizersOnExit(...)
+      - pattern: Runtime.runFinalizersOnExit(...)
