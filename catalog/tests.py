@@ -14,6 +14,7 @@ subprocess를 모킹하거나 raw_result를 직접 넣어, 바이너리 유무�
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -33,7 +34,7 @@ from rest_framework.test import APITestCase
 
 from accounts.models import Role
 from analysis.models import AnalysisRun, AnalysisStatus
-from analysis.services import run_semgrep, source_dir
+from analysis.services import fs_path, run_semgrep, source_dir
 from analysis.signals import run_succeeded
 from projects.models import Project, ProjectMember
 
@@ -152,8 +153,9 @@ class WorkspaceMixin:
 
     def write_source(self, run, relative_path, content):
         target = source_dir(run) / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding='utf-8')
+        # 확장 경로로 쓴다 — 260자 넘는 경로 테스트가 Windows에서도 돌게.
+        os.makedirs(fs_path(target.parent), exist_ok=True)
+        Path(fs_path(target)).write_text(content, encoding='utf-8')
         return target
 
 
@@ -444,6 +446,20 @@ class IngestTests(WorkspaceMixin, TestCase):
         target = self.write_source(self.run, 'app/db.py', 'a = 1\nb = 2\nc = 3\n')
         self.ingest([semgrep_result(target, 'KISA-IV-01', line=2)])
         self.assertEqual(Finding.objects.get(run=self.run).code_snippet, 'b = 2')
+
+    def test_finding_beyond_windows_max_path_is_kept_with_snippet(self):
+        """Semgrep에 확장 경로로 넘기면 결과 경로에도 접두사가 붙어 온다 — 상대경로
+        변환과 조각 읽기가 모두 그 경로로 동작해야 260자 넘는 파일의 결과가 안 버려진다
+        (2026-09-04 긴 경로 500 후속)."""
+        deep = '/'.join(['d' * 50] * 5) + '/deep.py'
+        target = self.write_source(self.run, deep, 'a = 1\nb = 2\n')
+        self.assertGreater(len(str(target)), 260)
+
+        self.ingest([semgrep_result(fs_path(target), 'KISA-IV-01', line=2)])
+
+        finding = Finding.objects.get(run=self.run)
+        self.assertEqual(finding.file_path, deep)
+        self.assertEqual(finding.code_snippet, 'b = 2')
 
     def test_long_line_is_truncated(self):
         target = self.write_source(self.run, 'app/long.py', 'x = "' + 'A' * 50_000 + '"\n')

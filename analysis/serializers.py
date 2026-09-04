@@ -1,4 +1,5 @@
 """분석 실행 직렬화 (SFR-007~009, SEC-008)."""
+import shutil
 
 from django.db.models import Count
 from rest_framework import serializers
@@ -6,7 +7,9 @@ from rest_framework import serializers
 from projects.serializers import UserBriefSerializer
 
 from .models import AnalysisRun
-from .services import ZipValidationError, extract_zip_safely, run_sequence
+from .services import (
+    ZipValidationError, extract_zip_safely, fs_path, run_sequence, workspace_dir,
+)
 
 
 class AnalysisRunSerializer(serializers.ModelSerializer):
@@ -101,5 +104,12 @@ class AnalysisRunUploadSerializer(serializers.Serializer):
             # 등록해 둔 실행 행도 함께 지워 잘못된 PENDING 기록을 남기지 않는다.
             run.delete()
             raise serializers.ValidationError({'file': [str(exc)]})
+        except Exception:
+            # 검증 밖의 실패(파일 시스템 오류 등)는 500으로 올라가되, 반쯤 풀린 격리
+            # 디렉토리와 PENDING 행을 남기지 않는다 — 남으면 실행 목록에 실체 없는
+            # 실행이 보이고 실행하면 일부 파일만 스캔된다 (2026-09-04, 긴 경로 500 후속).
+            shutil.rmtree(fs_path(workspace_dir(run)), ignore_errors=True)
+            run.delete()
+            raise
 
         return run

@@ -15,7 +15,7 @@ from django.db import transaction
 from django.db.models import F
 
 from analysis.models import AnalysisRun, AnalysisStatus
-from analysis.services import source_dir
+from analysis.services import fs_path, source_dir, strip_extended_prefix, strip_nul
 
 from .fingerprint import assign_fingerprints
 from .models import DiagnosticRule, Finding, Severity
@@ -98,6 +98,9 @@ def _relative_path(raw_path, source_root):
     """
     if not raw_path:
         return None
+    # Semgrep에는 확장 경로(\\?\)로 넘기므로 결과 경로에도 그 접두사가 붙어 온다.
+    # 접두사가 남아 있으면 격리 루트와 비교가 안 돼 결과가 통째로 버려진다.
+    raw_path = strip_extended_prefix(raw_path)
     try:
         return Path(raw_path).resolve().relative_to(source_root).as_posix()
     except (ValueError, OSError):
@@ -143,6 +146,8 @@ def _extract_lines(source_root, relative_path, start_line, end_line):
     context_start = max(1, start_line - SNIPPET_CONTEXT_LINES)
     context_end = last_line + SNIPPET_CONTEXT_LINES
 
+    # 260자 넘는 경로도 읽을 수 있도록 확장 경로로 연다 (analysis.services.fs_path).
+    target = Path(fs_path(target))
     picked = {}
     try:
         if not target.is_file():
@@ -159,7 +164,8 @@ def _extract_lines(source_root, relative_path, start_line, end_line):
                 if number > context_end:
                     break
                 if number >= context_start:
-                    picked[number] = line.rstrip('\n')[:MAX_SNIPPET_LINE_CHARS]
+                    # NUL은 PostgreSQL text에 저장되지 않는다 — 바이너리 섞인 소스 방어.
+                    picked[number] = strip_nul(line.rstrip('\n'))[:MAX_SNIPPET_LINE_CHARS]
     except OSError:
         return '', None
 
@@ -208,7 +214,7 @@ def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
         file_path=relative_path,
         start_line=start_line,
         end_line=end_line,
-        message=extra.get('message') or '',
+        message=strip_nul(extra.get('message') or ''),
         code_snippet=snippet,
         extra={
             'cwe': metadata.get('cwe', ''),

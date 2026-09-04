@@ -30,7 +30,7 @@ from accounts.models import Role
 from projects.models import Project, ProjectMember
 
 from .models import AnalysisRun, AnalysisStatus
-from .services import source_dir, workspace_dir
+from .services import fs_path, source_dir, workspace_dir
 
 User = get_user_model()
 
@@ -242,6 +242,65 @@ class ZipLimitTests(AnalysisTestCase):
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
             self.assertEqual(AnalysisRun.objects.count(), 0)
 
+    def test_macos_metadata_entries_are_skipped(self):
+        """Finder 압축의 __MACOSX/·._*·.DS_Store는 소스가 아니므로 풀지 않는다.
+
+        .py를 흉내 낸 AppleDouble 파일을 Semgrep이 파싱하려다 NUL이 든 오류를 내고,
+        그 JSON이 jsonb에 저장되지 못해 실행이 RUNNING에 고착됐던 사례(2026-09-04).
+        """
+        self.login(self.admin)
+        response = self.client.post(
+            list_url(self.project_a.pk),
+            {'file': upload_file(entries={
+                'app/main.py': 'x = 1',
+                '__MACOSX/app/._main.py': 'Mac OS X binary',
+                'app/._helper.py': 'Mac OS X binary',
+                '.DS_Store': 'binary',
+                'app/.DS_Store': 'binary',
+            })},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        run = AnalysisRun.objects.get(pk=response.data['id'])
+        extracted = sorted(
+            p.relative_to(source_dir(run)).as_posix()
+            for p in source_dir(run).rglob('*') if p.is_file()
+        )
+        self.assertEqual(extracted, ['app/main.py'])
+
+    def test_entry_beyond_windows_max_path_is_extracted(self):
+        """격리 루트까지 합쳐 260자를 넘는 항목도 풀린다.
+
+        깊은 Java 패키지 경로가 든 zip이 Windows MAX_PATH에 걸려 FileNotFoundError로
+        500이 났던 사례(2026-09-04, 261자). 확장 경로(fs_path)로 쓰므로 길이 제한이 없다.
+        """
+        deep_name = '/'.join(['d' * 50] * 5) + '/' + 'f' * 40 + '.py'
+        self.login(self.admin)
+        response = self.client.post(
+            list_url(self.project_a.pk),
+            {'file': upload_file(entries={deep_name: 'x = 1'})},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        run = AnalysisRun.objects.get(pk=response.data['id'])
+        target = source_dir(run) / deep_name
+        self.assertGreater(len(str(target)), 260)
+        with open(fs_path(target), encoding='utf-8') as handle:
+            self.assertEqual(handle.read(), 'x = 1')
+
+    @patch('analysis.serializers.extract_zip_safely', side_effect=OSError('disk'))
+    def test_unexpected_extract_failure_leaves_no_run_or_workspace(self, _mock):
+        """검증 밖의 추출 실패는 500이어도 PENDING 행·반쯤 풀린 디렉토리를 남기지 않는다."""
+        self.login(self.admin)
+        with self.assertRaises(OSError):
+            self.client.post(
+                list_url(self.project_a.pk),
+                {'file': upload_file(entries={'app/main.py': 'x = 1'})},
+                format='multipart',
+            )
+        self.assertEqual(AnalysisRun.objects.count(), 0)
+        self.assertEqual(list(self.tmp_root.iterdir()), [])
+
     def test_total_extracted_size_over_limit_is_rejected(self):
         with override_settings(ANALYSIS_MAX_EXTRACTED_SIZE=10):
             self.login(self.admin)
@@ -451,6 +510,24 @@ class ExecuteStatusTests(AnalysisTestCase):
         second = self.client.post(execute_url(run_id))
         self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
         self.assertEqual(mock_run.call_count, 1)
+
+    @patch('analysis.services.subprocess.run')
+    def test_nul_in_semgrep_output_is_stripped_before_save(self, mock_run):
+        """PostgreSQL jsonb는 U+0000을 저장하지 못한다 — 도구 출력의 NUL은 걷어낸다."""
+        run_id = self._upload()
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = json.dumps({
+            'results': [],
+            'errors': [{'message': 'parse error: `' + chr(0) + chr(0) + '` at 1:1'}],
+        })
+        mock_run.return_value.stderr = ''
+
+        response = self.client.post(execute_url(run_id))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], AnalysisStatus.SUCCEEDED)
+        run = AnalysisRun.objects.get(pk=run_id)
+        self.assertEqual(run.raw_result['errors'][0]['message'], 'parse error: `` at 1:1')
 
     @patch('analysis.services.subprocess.run')
     def test_empty_zip_marks_failed_without_running_semgrep(self, mock_run):

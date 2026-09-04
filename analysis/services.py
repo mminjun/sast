@@ -54,6 +54,65 @@ def source_dir(run):
     return workspace_dir(run) / 'source'
 
 
+# macOS Finder가 압축할 때 끼워 넣는 메타데이터. 소스가 아니고 바이너리라, .py 확장자를
+# 흉내 낸 AppleDouble 파일(__MACOSX/.../._x.py)을 Semgrep이 파싱하려다 NUL 문자가 든
+# 오류를 만들고 그 JSON이 PostgreSQL jsonb에 저장되지 못해 실행이 RUNNING에 고착됐다
+# (2026-09-04 석대원.zip). 검증은 통과시키되 추출에서 건너뛴다.
+MACOS_METADATA_DIR = '__MACOSX'
+MACOS_METADATA_FILES = ('.DS_Store',)
+MACOS_METADATA_PREFIX = '._'
+# PostgreSQL text/jsonb는 NUL(U+0000)을 저장하지 못한다. 외부 도구 출력과 고객 소스에서
+# 온 문자열은 저장 전에 걷어낸다 (방어선 — 위 메타데이터 제외가 근본 해결).
+NUL = chr(0)
+# Windows 확장 경로 접두사. 붙이면 MAX_PATH(260자) 제한을 받지 않는다. 고객 소스는
+# 깊은 패키지 경로가 흔해(예: Java) 격리 루트까지 합치면 260자를 쉽게 넘고, 시스템의
+# LongPathsEnabled가 꺼진 기본 환경에서는 파일 생성이 FileNotFoundError로 실패했다
+# (2026-09-04, 261자 경로 업로드 500). Semgrep도 이 접두사 경로를 그대로 스캔한다.
+EXTENDED_PATH_PREFIX = '\\\\?\\'
+
+
+def fs_path(path):
+    """OS 호출(open·makedirs·Semgrep 인자)에 넘길 경로 문자열.
+
+    Windows에서는 절대경로에 확장 경로 접두사를 붙여 돌려준다. 다른 OS나 이미 접두사가
+    붙은 경로는 그대로다. 접두사 경로는 OS가 정규화하지 않으므로 abspath로 먼저
+    정규화한다 ('..'·'/' 제거).
+    """
+    text = os.fspath(path)
+    if os.name != 'nt' or text.startswith(EXTENDED_PATH_PREFIX):
+        return text
+    return EXTENDED_PATH_PREFIX + os.path.abspath(text)
+
+
+def strip_extended_prefix(text):
+    """외부 도구(Semgrep)가 돌려준 경로에서 확장 경로 접두사를 뗀다."""
+    if text.startswith(EXTENDED_PATH_PREFIX):
+        return text[len(EXTENDED_PATH_PREFIX):]
+    return text
+
+
+def is_macos_metadata(name):
+    """zip 항목 이름이 macOS 메타데이터(__MACOSX/, ._*, .DS_Store)인지."""
+    parts = Path(name).parts
+    if not parts:
+        return False
+    if MACOS_METADATA_DIR in parts:
+        return True
+    base = parts[-1]
+    return base in MACOS_METADATA_FILES or base.startswith(MACOS_METADATA_PREFIX)
+
+
+def strip_nul(value):
+    """dict/list/str 안의 NUL 문자를 재귀적으로 제거한다. 다른 타입은 그대로."""
+    if isinstance(value, str):
+        return value.replace(NUL, '')
+    if isinstance(value, list):
+        return [strip_nul(item) for item in value]
+    if isinstance(value, dict):
+        return {key: strip_nul(item) for key, item in value.items()}
+    return value
+
+
 def _is_unsafe_member(info, dest_root):
     """zip 항목 하나가 안전하지 않은지 판정한다 (Zip Slip 방어, SEC-008)."""
     name = info.filename
@@ -122,14 +181,15 @@ def extract_zip_safely(uploaded_file, run):
         dest_root.mkdir(parents=True, exist_ok=True)
         written_size = 0
         for info in infolist:
-            if info.is_dir():
+            if info.is_dir() or is_macos_metadata(info.filename):
                 continue
             target = (dest_root / info.filename).resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
+            # 260자 넘는 경로도 만들 수 있도록 확장 경로로 생성한다 (fs_path 참고).
+            os.makedirs(fs_path(target.parent), exist_ok=True)
             # info.file_size(중앙 디렉토리 선언값)는 조작될 수 있으므로, 실제로 읽어
             # 쓴 바이트 수를 청크 단위로 누적 확인한다 — 선언값이 아니라 실측값 기준
             # 상한이어야 zip bomb 방어가 실효성이 있다 (SEC-008, secure-review 지적).
-            with zf.open(info) as src, open(target, 'wb') as dst:
+            with zf.open(info) as src, open(fs_path(target), 'wb') as dst:
                 while True:
                     chunk = src.read(1024 * 1024)
                     if not chunk:
@@ -137,7 +197,7 @@ def extract_zip_safely(uploaded_file, run):
                     written_size += len(chunk)
                     if written_size > settings.ANALYSIS_MAX_EXTRACTED_SIZE:
                         dst.close()
-                        shutil.rmtree(dest_root, ignore_errors=True)
+                        shutil.rmtree(fs_path(dest_root), ignore_errors=True)
                         max_mb = settings.ANALYSIS_MAX_EXTRACTED_SIZE // (1024 * 1024)
                         raise ZipValidationError(
                             f'압축 해제 후 총 용량이 상한({max_mb}MB)을 초과합니다.'
@@ -167,7 +227,9 @@ def run_semgrep(run):
     run.status를 직접 갱신·저장한다 — 호출자(뷰)는 결과만 확인하면 된다.
     RUNNING 전환은 start_run()이 이미 원자적으로 마쳤다고 가정한다.
     """
-    target = source_dir(run)
+    # 확장 경로(fs_path)로 다룬다 — 일반 경로로 넘기면 Windows에서 260자 넘는 파일은
+    # 오류 없이 스캔에서 조용히 빠진다 (2026-09-04 실험으로 확인).
+    target = Path(fs_path(source_dir(run)))
 
     # 분석 대상 파일이 하나도 없으면 Semgrep을 돌리지 않는다. 빈 zip·지원 언어 파일이
     # 없는 zip도 Semgrep은 exit 0을 반환해 SUCCEEDED·0건으로 보이는데, 대상 없는
@@ -227,12 +289,14 @@ def run_semgrep(run):
     # 0이 아니면 스캔 자체의 실패(설정 오류 등)로 취급한다.
     if completed.returncode != 0:
         run.status = AnalysisStatus.FAILED
-        run.error_message = (completed.stderr or '')[:4000] or 'Semgrep 실행이 실패했습니다.'
+        run.error_message = (
+            strip_nul(completed.stderr or '')[:4000] or 'Semgrep 실행이 실패했습니다.'
+        )
         run.finished_at = timezone.now()
         run.save(update_fields=['status', 'error_message', 'finished_at'])
         return
 
-    run.raw_result = json.loads(completed.stdout)
+    run.raw_result = strip_nul(json.loads(completed.stdout))
     run.status = AnalysisStatus.SUCCEEDED
     run.finished_at = timezone.now()
     run.save(update_fields=['raw_result', 'status', 'finished_at'])
