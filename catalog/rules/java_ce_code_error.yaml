@@ -1,0 +1,116 @@
+# KISA 제5절 코드오류 (CE) — Java 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-ce-01-java-null-dereference
+    languages: [java]
+    severity: WARNING
+    message: >-
+      Null Pointer 역참조 (KISA-CE-01). getParameter/getHeader/getAttribute는 값이 없으면 null을
+      돌려주는데 바로 메서드를 호출하고 있습니다. null 확인 뒤 사용하세요.
+    metadata:
+      kisa_code: KISA-CE-01
+      kisa_name: Null Pointer 역참조
+      cwe: CWE-476
+    # C 룰과 같은 축소 범위 — 결과를 받은 직후 문장에서 역참조할 때만. 사이에 문장이 있으면
+    # 검사일 수 있으므로 잡지 않는다 (미탐을 택함, docs/decisions.md).
+    pattern-either:
+      - pattern: |
+          $T $X = $REQ.getParameter(...);
+          $X.$M(...);
+      - pattern: |
+          $T $X = $REQ.getParameter(...);
+          $Y = $X.$M(...);
+      - pattern: |
+          $T $X = $REQ.getParameter(...);
+          $T2 $Y = $X.$M(...);
+      - pattern: |
+          $T $X = $REQ.getParameter(...);
+          if ($X.$M(...)) { ... }
+      - pattern: |
+          $T $X = $REQ.getHeader(...);
+          $X.$M(...);
+      - pattern: |
+          $T $X = $REQ.getHeader(...);
+          $T2 $Y = $X.$M(...);
+      - pattern: |
+          $T $X = $REQ.getHeader(...);
+          if ($X.$M(...)) { ... }
+      - pattern: |
+          $T $X = ($C) $SESSION.getAttribute(...);
+          $X.$M(...);
+      - pattern: |
+          $T $X = ($C) $SESSION.getAttribute(...);
+          $T2 $Y = $X.$M(...);
+      - pattern: |
+          $T $X = ($C) $SESSION.getAttribute(...);
+          if ($X.$M(...)) { ... }
+
+  - id: kisa-ce-02-java-resource-leak
+    languages: [java]
+    severity: WARNING
+    message: >-
+      부적절한 자원 해제 (KISA-CE-02). 연 스트림·커넥션·소켓을 같은 메서드에서 닫지 않습니다. try-with-resources로 열거나
+      finally에서 close 하세요.
+    metadata:
+      kisa_code: KISA-CE-02
+      kisa_name: 부적절한 자원 해제
+      cwe: CWE-772
+    # Python·C 룰과 같은 구조 — 핸들을 변수로 든 뒤 같은 블록에서 try-with-resources·close·return이
+    # 없으면 누수로 본다. 필드에 보관하거나 다른 메서드에 넘겨 닫는 경우는 잡지 않는다.
+    patterns:
+      - pattern-either:
+          - pattern: $T $FD = new FileInputStream(...);
+          - pattern: $T $FD = new FileOutputStream(...);
+          - pattern: $T $FD = new FileReader(...);
+          - pattern: $T $FD = new FileWriter(...);
+          - pattern: $T $FD = new BufferedReader(...);
+          - pattern: $T $FD = new BufferedWriter(...);
+          - pattern: $T $FD = $DS.getConnection(...);
+          - pattern: $T $FD = DriverManager.getConnection(...);
+          - pattern: $T $FD = new Socket(...);
+      - pattern-not-inside: |
+          try ($T2 $R = $E) { ... }
+      - pattern-not-inside: |
+          $T $FD = $NEW;
+          ...
+          $FD.close();
+      - pattern-not-inside: |
+          $T $FD = $NEW;
+          ...
+          return $FD;
+
+  - id: kisa-ce-05-java-unsafe-deserialization
+    languages: [java]
+    severity: ERROR
+    message: >-
+      신뢰할 수 없는 데이터의 역직렬화 (KISA-CE-05). ObjectInputStream·XMLDecoder·XStream·SnakeYAML은 복원
+      과정에서 임의 객체를 생성하며 코드 실행으로 이어집니다. JSON 등 데이터 전용 형식을 쓰거나 허용 클래스를 제한하세요.
+    metadata:
+      kisa_code: KISA-CE-05
+      kisa_name: 신뢰할 수 없는 데이터의 역직렬화
+      cwe: CWE-502
+    pattern-either:
+      - pattern: new ObjectInputStream(...).readObject()
+      - pattern: |
+          $OIS = new ObjectInputStream(...);
+          ...
+          $OIS.readObject();
+      - pattern: |
+          ObjectInputStream $OIS = new ObjectInputStream(...);
+          ...
+          $OIS.readObject();
+      - pattern: new XMLDecoder(...).readObject()
+      - pattern: |
+          XMLDecoder $D = new XMLDecoder(...);
+          ...
+          $D.readObject();
+      - pattern: $XS.fromXML(...)
+      - pattern: new Yaml().load(...)
+      - pattern: |
+          Yaml $Y = new Yaml();
+          ...
+          $Y.load(...);
+      - pattern: $OM.enableDefaultTyping(...)

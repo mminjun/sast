@@ -1,0 +1,108 @@
+# KISA 제6절 캡슐화 (EN) — Java 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-en-01-java-servlet-instance-field
+    languages: [java]
+    severity: ERROR
+    message: >-
+      잘못된 세션에 의한 데이터 정보노출 (KISA-EN-01). 서블릿은 요청마다 새로 만들어지지 않는 단일 객체라, 인스턴스 필드에 요청 데이터를
+      저장하면 다른 사용자의 요청에서 읽힙니다. 지역 변수나 세션을 사용하세요.
+    metadata:
+      kisa_code: KISA-EN-01
+      kisa_name: 잘못된 세션에 의한 데이터 정보노출
+      cwe: CWE-488
+    # HttpServlet 하위 클래스의 필드에 doGet/doPost/… 안에서 대입하는 경우.
+    patterns:
+      - pattern-inside: |
+          class $C extends HttpServlet { ... }
+      - pattern-inside: |
+          $T $F;
+          ...
+      - pattern-either:
+          - pattern-inside: |
+              protected void $DO(HttpServletRequest $REQ, HttpServletResponse $RESP) { ... }
+          - pattern-inside: |
+              public void $DO(HttpServletRequest $REQ, HttpServletResponse $RESP) { ... }
+      - pattern: $F = $V;
+      - metavariable-regex:
+          metavariable: $DO
+          regex: ^(doGet|doPost|doPut|doDelete|service)$
+
+  - id: kisa-en-02-java-leftover-debug-code
+    languages: [java]
+    severity: WARNING
+    message: >-
+      제거되지 않고 남은 디버그 코드 (KISA-EN-02). 디버그 설정·덤프 호출이 배포 코드에 남으면 내부 상태가 노출됩니다. 배포 전에 제거하세요.
+    metadata:
+      kisa_code: KISA-EN-02
+      kisa_name: 제거되지 않고 남은 디버그 코드
+      cwe: CWE-489
+    pattern-either:
+      - pattern: '@EnableWebSecurity(debug = true)'
+      - pattern: Thread.dumpStack()
+
+  - id: kisa-en-03-java-private-array-returned
+    languages: [java]
+    severity: INFO
+    message: >-
+      Public 메소드부터 반환된 Private 배열 (KISA-EN-03). private 배열의 참조를 그대로 반환하면 외부에서 내부 상태를 바꿀 수
+      있습니다. clone()이나 불변 뷰로 돌려주세요.
+    metadata:
+      kisa_code: KISA-EN-03
+      kisa_name: Public 메소드부터 반환된 Private 배열
+      cwe: CWE-495
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              class $C {
+                ...
+                private $T[] $F;
+                ...
+              }
+          - pattern-inside: |
+              class $C {
+                ...
+                private $T[] $F = $INIT;
+                ...
+              }
+          - pattern-inside: |
+              class $C {
+                ...
+                private final $T[] $F = $INIT;
+                ...
+              }
+      - pattern: |
+          public $T[] $M(...) { ... return $F; }
+
+  - id: kisa-en-04-java-private-array-assigned
+    languages: [java]
+    severity: INFO
+    message: >-
+      Private 배열에 Public 데이터 할당 (KISA-EN-04). 외부에서 받은 배열 참조를 private 필드에 그대로 저장하면 내부 상태가
+      외부와 공유됩니다. 복사해서 저장하세요.
+    metadata:
+      kisa_code: KISA-EN-04
+      kisa_name: Private 배열에 Public 데이터 할당
+      cwe: CWE-496
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              class $C {
+                ...
+                private $T[] $F;
+                ...
+              }
+          - pattern-inside: |
+              class $C {
+                ...
+                private $T[] $F = $INIT;
+                ...
+              }
+      - pattern-inside: |
+          public $R $M(..., $T[] $P, ...) { ... }
+      - pattern-either:
+          - pattern: this.$F = $P;
+          - pattern: $F = $P;

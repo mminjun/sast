@@ -7,8 +7,9 @@
 - 프론트엔드: React + Vite (`frontend/`)
 - DB: PostgreSQL (docker-compose)
 - 분석 엔진: Semgrep (자체 룰 `catalog/rules/*.yaml`만 사용)
-- 분석 대상 언어: Python(`.py`, 룰 21개) + C(`.c`/`.h`, 룰 13개 — `c_*.yaml`).
-  49개 기준 중 27개가 실탐지, 그중 7개는 두 언어 모두에서 탐지
+- 분석 대상 언어: Python(`.py`, 룰 21개), C(`.c`/`.h`, 13개), Java(`.java`, 35개),
+  JavaScript/TypeScript(`.js`/`.jsx`/`.ts`/`.tsx`, 30개). 언어별 룰은 `c_*`/`java_*`/`js_*.yaml`.
+  49개 기준 중 39개가 실탐지이며, 같은 항목을 여러 언어 룰이 각각 잡는다
 
 ## 실행 방법 (Getting Started)
 

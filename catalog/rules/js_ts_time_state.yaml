@@ -1,0 +1,29 @@
+# KISA 제3절 시간 및 상태 (TS) — JavaScript/TypeScript 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-ts-01-js-toctou
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      경쟁조건: 검사 시점과 사용 시점(TOCTOU) (KISA-TS-01). existsSync/accessSync/statSync로 검사한 뒤 같은
+      경로를 여는 사이에 파일이 바뀌면 검사가 무효가 됩니다. flag 'wx'로 열거나 예외로 판단하세요.
+    metadata:
+      kisa_code: KISA-TS-01
+      kisa_name: '경쟁조건: 검사 시점과 사용 시점(TOCTOU)'
+      cwe: CWE-367
+    pattern-either:
+      - pattern: |
+          if (fs.existsSync($P)) { ... fs.$OP($P, ...); ... }
+      - pattern: |
+          if (!fs.existsSync($P)) { ... fs.$OP($P, ...); ... }
+      - pattern: |
+          fs.accessSync($P, ...);
+          ...
+          fs.$OP($P, ...);
+      - pattern: |
+          fs.statSync($P);
+          ...
+          fs.$OP($P, ...);

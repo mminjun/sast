@@ -1,0 +1,329 @@
+# KISA 제1절 입력데이터 검증 및 표현 (IV) — JavaScript/TypeScript 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-iv-01-js-sql-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      SQL 삽입 (KISA-IV-01). 외부 입력이 섞인 문자열(결합·템플릿 리터럴)을 그대로 질의로 실행하고 있습니다. 파라미터 바인딩(?, $1)을
+      사용하세요.
+    metadata:
+      kisa_code: KISA-IV-01
+      kisa_name: SQL 삽입
+      cwe: CWE-89
+    # query/execute/raw/prepare에 결합·템플릿을 넘기는 형태. `${esc(x)}`처럼 함수를 거친 값은 제외.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$Q(<... "..." + $X ...>, ...)
+          - pattern: '$DB.$Q(`...${$X}...`, ...)'
+          - pattern: |
+              $SQL = <... "..." + $X ...>;
+              ...
+              $DB.$Q($SQL, ...);
+          - pattern: |
+              $SQL = `...${$X}...`;
+              ...
+              $DB.$Q($SQL, ...);
+      - metavariable-regex:
+          metavariable: $Q
+          regex: ^(query|execute|raw|prepare|queryRaw|executeRaw)$
+      - pattern-not: '$DB.$Q(`...${$F(...)}...`, ...)'
+
+  - id: kisa-iv-02-js-code-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      코드삽입 (KISA-IV-02). 외부에서 들어온 값이 eval/new Function/vm/문자열 setTimeout으로 코드로 해석될 수 있습니다.
+      JSON.parse 등 데이터 파서로 바꾸세요.
+    metadata:
+      kisa_code: KISA-IV-02
+      kisa_name: 코드삽입
+      cwe: CWE-94
+    # 상수 문자열·함수 인자는 제외한다 (오탐 억제).
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function(..., $X)
+          - pattern: Function(..., $X)
+          - pattern: vm.runInNewContext($X, ...)
+          - pattern: vm.runInThisContext($X, ...)
+          - pattern: setTimeout($X, ...)
+          - pattern: setInterval($X, ...)
+      - pattern-not: eval("...")
+      - pattern-not: new Function(..., "...")
+      - pattern-not: 'setTimeout(function(...) { ... }, ...)'
+      - pattern-not: setTimeout(($A) => $B, ...)
+      - pattern-not: setTimeout(() => $B, ...)
+      - pattern-not: setTimeout($F, ...)
+      - pattern-not: 'setInterval(function(...) { ... }, ...)'
+      - pattern-not: setInterval(() => $B, ...)
+      - pattern-not: setInterval($F, ...)
+
+  - id: kisa-iv-03-js-path-manipulation
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      경로 조작 및 자원 삽입 (KISA-IV-03). 요청 값(req.query/params/body)으로 만든 경로를 그대로 fs·sendFile에
+      씁니다. path.resolve로 정규화한 뒤 기준 디렉토리 안인지 확인하세요.
+    metadata:
+      kisa_code: KISA-IV-03
+      kisa_name: 경로 조작 및 자원 삽입
+      cwe: CWE-22
+    pattern-either:
+      - pattern: fs.$OP(<... $REQ.query.$P ...>, ...)
+      - pattern: fs.$OP(<... $REQ.params.$P ...>, ...)
+      - pattern: fs.$OP(<... $REQ.body.$P ...>, ...)
+      - pattern: fs.$OP("..." + $X, ...)
+      - pattern: 'fs.$OP(`...${$X}...`, ...)'
+      - pattern: $RES.sendFile(<... $REQ.query.$P ...>, ...)
+      - pattern: $RES.sendFile(<... $REQ.params.$P ...>, ...)
+      - pattern: $RES.sendFile("..." + $X, ...)
+
+  - id: kisa-iv-04-js-xss
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      크로스사이트 스크립트 (KISA-IV-04). 검증되지 않은 값을
+      innerHTML/document.write/dangerouslySetInnerHTML 또는 res.send에 그대로 씁니다. textContent를
+      쓰거나 DOMPurify 등으로 정화하세요.
+    metadata:
+      kisa_code: KISA-IV-04
+      kisa_name: 크로스사이트 스크립트
+      cwe: CWE-79
+    # 브라우저 싱크는 리터럴·sanitize() 결과를 제외하고, Node 싱크는 req.*가 직접 들어갈 때만.
+    # res.send(f(x))처럼 함수를 거친 값은 이스케이프일 수 있어 제외한다 (오탐 억제).
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $X
+          - pattern: $EL.outerHTML = $X
+          - pattern: $EL.insertAdjacentHTML($POS, $X)
+          - pattern: document.write($X)
+          - pattern: document.writeln($X)
+          - pattern: $J.html($X)
+          - pattern: '{ __html: $X }'
+          - pattern: $RES.send(<... $REQ.query.$P ...>)
+          - pattern: $RES.send(<... $REQ.body.$P ...>)
+          - pattern: $RES.send(<... $REQ.params.$P ...>)
+          - pattern: $RES.write(<... $REQ.query.$P ...>)
+          - pattern: $RES.write(<... $REQ.body.$P ...>)
+      - pattern-not: $EL.innerHTML = "..."
+      - pattern-not: $EL.outerHTML = "..."
+      - pattern-not: $EL.innerHTML = ""
+      - pattern-not: $EL.insertAdjacentHTML($POS, "...")
+      - pattern-not: document.write("...")
+      - pattern-not: $J.html("...")
+      - pattern-not: '{ __html: "..." }'
+      - pattern-not: $EL.innerHTML = $S.sanitize(...)
+      - pattern-not: $EL.innerHTML = DOMPurify.sanitize(...)
+      - pattern-not: '{ __html: $S.sanitize(...) }'
+      - pattern-not: '{ __html: DOMPurify.sanitize(...) }'
+      - pattern-not: $RES.send($F(...))
+      - pattern-not: $RES.write($F(...))
+
+  - id: kisa-iv-05-js-os-command-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      운영체제 명령어 삽입 (KISA-IV-05). 변수로 조립한 문자열을 셸로 실행하고 있습니다. execFile/spawn에 인자를 배열로 넘기고
+      shell 옵션을 끄세요.
+    metadata:
+      kisa_code: KISA-IV-05
+      kisa_name: 운영체제 명령어 삽입
+      cwe: CWE-78
+    patterns:
+      - pattern-either:
+          - pattern: $CP.exec($CMD, ...)
+          - pattern: $CP.execSync($CMD, ...)
+          - pattern: exec($CMD, ...)
+          - pattern: execSync($CMD, ...)
+          - pattern: '$CP.spawn($CMD, ..., {..., shell: true, ...})'
+          - pattern: 'spawn($CMD, ..., {..., shell: true, ...})'
+          - pattern: $CP.spawn("sh", ["-c", $CMD], ...)
+          - pattern: spawn("sh", ["-c", $CMD], ...)
+      - pattern-not: $CP.exec("...", ...)
+      - pattern-not: $CP.execSync("...", ...)
+      - pattern-not: exec("...", ...)
+      - pattern-not: execSync("...", ...)
+      - pattern-not: '$CP.spawn("...", ..., {..., shell: true, ...})'
+      - pattern-not: 'spawn("...", ..., {..., shell: true, ...})'
+      - pattern-not: $CP.spawn("sh", ["-c", "..."], ...)
+      - pattern-not: spawn("sh", ["-c", "..."], ...)
+
+  - id: kisa-iv-06-js-dangerous-file-upload
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      위험한 형식 파일 업로드 (KISA-IV-06). 업로드 파일의 원래 이름(originalname)을 그대로 저장 경로에 씁니다. 확장자를 허용
+      목록으로 검증하고 서버가 만든 이름으로 저장하세요.
+    metadata:
+      kisa_code: KISA-IV-06
+      kisa_name: 위험한 형식 파일 업로드
+      cwe: CWE-434
+    pattern-either:
+      - pattern: path.join(..., $F.originalname, ...)
+      - pattern: $F.mv(<... $F.name ...>, ...)
+      - pattern: 'fs.$OP(`...${$F.originalname}...`, ...)'
+      - pattern: fs.$OP("..." + $F.originalname, ...)
+      - pattern: '{..., filename: ($R, $F, $CB) => { ... $CB(null, $F.originalname); ... }, ...}'
+      - pattern: '{..., filename: ($R, $F, $CB) => $CB(null, $F.originalname), ...}'
+
+  - id: kisa-iv-07-js-open-redirect
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      신뢰되지 않는 URL 주소로 자동접속 연결 (KISA-IV-07). 요청 값이나 URL 조각(location.hash/search)을 검증 없이
+      리다이렉트 대상으로 씁니다. 허용 목록으로 제한하세요.
+    metadata:
+      kisa_code: KISA-IV-07
+      kisa_name: 신뢰되지 않는 URL 주소로 자동접속 연결
+      cwe: CWE-601
+    pattern-either:
+      - pattern: $RES.redirect(<... $REQ.query.$P ...>)
+      - pattern: $RES.redirect(<... $REQ.body.$P ...>)
+      - pattern: $RES.redirect(<... $REQ.params.$P ...>)
+      - pattern: $RES.redirect($STATUS, <... $REQ.query.$P ...>)
+      - pattern: window.location = <... location.hash ...>
+      - pattern: window.location = <... location.search ...>
+      - pattern: window.location.href = <... location.hash ...>
+      - pattern: window.location.href = <... location.search ...>
+      - pattern: location.href = <... location.hash ...>
+      - pattern: location.href = <... location.search ...>
+      - pattern: location.href = <... $PARAMS.get(...) ...>
+      - pattern: window.location.href = <... $PARAMS.get(...) ...>
+      - pattern: window.location = <... $PARAMS.get(...) ...>
+
+  - id: kisa-iv-08-js-xxe
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      부적절한 XML 외부개체 참조 (KISA-IV-08). XML 파서에 noent:true를 줘 외부 개체 치환을 허용하고 있습니다. 끄세요.
+    metadata:
+      kisa_code: KISA-IV-08
+      kisa_name: 부적절한 XML 외부개체 참조
+      cwe: CWE-611
+    pattern-either:
+      - pattern: 'libxmljs.parseXml($X, {..., noent: true, ...})'
+      - pattern: 'libxmljs.parseXmlString($X, {..., noent: true, ...})'
+      - pattern: '$L.parseXml($X, {..., noent: true, ...})'
+
+  - id: kisa-iv-10-js-ldap-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      LDAP 삽입 (KISA-IV-10). 외부 입력을 결합해 LDAP 필터를 만들고 있습니다. 필터 이스케이프를 거치세요.
+    metadata:
+      kisa_code: KISA-IV-10
+      kisa_name: LDAP 삽입
+      cwe: CWE-90
+    patterns:
+      - pattern-either:
+          - pattern: '$C.search($BASE, {..., filter: <... "..." + $X ...>, ...}, ...)'
+          - pattern: '$C.search($BASE, {..., filter: `...${$X}...`, ...}, ...)'
+          - pattern: |
+              $F = <... "..." + $X ...>;
+              ...
+              $C.search($BASE, {..., filter: $F, ...}, ...);
+          - pattern: |
+              $F = `...${$X}...`;
+              ...
+              $C.search($BASE, {..., filter: $F, ...}, ...);
+      - pattern-not: '$C.search($BASE, {..., filter: `...${$FN(...)}...`, ...}, ...)'
+
+  - id: kisa-iv-12-js-ssrf
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      서버사이드 요청 위조 (KISA-IV-12). 요청 값으로 만든 주소로 서버가 요청(fetch/axios/http)을 보냅니다. 허용 목록으로 대상
+      호스트를 제한하세요.
+    metadata:
+      kisa_code: KISA-IV-12
+      kisa_name: 서버사이드 요청 위조
+      cwe: CWE-918
+    pattern-either:
+      - pattern: fetch(<... $REQ.query.$P ...>, ...)
+      - pattern: fetch(<... $REQ.body.$P ...>, ...)
+      - pattern: fetch("..." + $X, ...)
+      - pattern: 'fetch(`...${$X}...`, ...)'
+      - pattern: axios.$M(<... $REQ.query.$P ...>, ...)
+      - pattern: axios.$M(<... $REQ.body.$P ...>, ...)
+      - pattern: axios.$M("..." + $X, ...)
+      - pattern: 'axios.$M(`...${$X}...`, ...)'
+      - pattern: axios(<... $REQ.query.$P ...>, ...)
+      - pattern: axios(<... $REQ.body.$P ...>, ...)
+      - pattern: http.get(<... $REQ.query.$P ...>, ...)
+      - pattern: https.get(<... $REQ.query.$P ...>, ...)
+      - pattern: http.get("..." + $X, ...)
+      - pattern: https.get("..." + $X, ...)
+      - pattern: http.request(<... $REQ.query.$P ...>, ...)
+      - pattern: https.request(<... $REQ.body.$P ...>, ...)
+
+  - id: kisa-iv-13-js-http-response-splitting
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      HTTP 응답분할 (KISA-IV-13). 요청 값이 응답 헤더·쿠키 값에 그대로 들어갑니다. 개행(CR/LF)을 제거하거나 허용 문자로 검증하세요.
+    metadata:
+      kisa_code: KISA-IV-13
+      kisa_name: HTTP 응답분할
+      cwe: CWE-113
+    pattern-either:
+      - pattern: $RES.setHeader($N, <... $REQ.query.$P ...>)
+      - pattern: $RES.setHeader($N, <... $REQ.body.$P ...>)
+      - pattern: $RES.set($N, <... $REQ.query.$P ...>)
+      - pattern: $RES.set($N, <... $REQ.body.$P ...>)
+      - pattern: $RES.header($N, <... $REQ.query.$P ...>)
+      - pattern: $RES.cookie($N, <... $REQ.query.$P ...>, ...)
+      - pattern: $RES.cookie($N, <... $REQ.body.$P ...>, ...)
+      - pattern: '$RES.writeHead($S, {..., $N: <... $REQ.query.$P ...>, ...})'
+
+  - id: kisa-iv-15-js-security-decision-on-input
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      보안기능 결정에 사용되는 부적절한 입력값 (KISA-IV-15). 요청 값(req.query.role, req.body.isAdmin 등)을 그대로
+      권한 판단에 쓰고 있습니다. 권한은 서버 세션·DB의 값으로 결정하세요.
+    metadata:
+      kisa_code: KISA-IV-15
+      kisa_name: 보안기능 결정에 사용되는 부적절한 입력값
+      cwe: CWE-807
+    # Java 룰과 같은 기준 — 이름 + '리터럴과 동등 비교 또는 진리값 분기'일 때만.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.$SRC.$NAME === $LIT
+                  - pattern: $REQ.$SRC.$NAME == $LIT
+                  - pattern: $REQ.$SRC.$NAME !== $LIT
+                  - pattern: $REQ.$SRC.$NAME != $LIT
+                  - pattern: $LIT === $REQ.$SRC.$NAME
+                  - pattern: $LIT == $REQ.$SRC.$NAME
+                  - pattern: |
+                      $X = $REQ.$SRC.$NAME;
+                      ...
+                      if (<... $X === $LIT ...>) { ... }
+                  - pattern: |
+                      $X = $REQ.$SRC.$NAME;
+                      ...
+                      if (<... $X == $LIT ...>) { ... }
+              - metavariable-regex:
+                  metavariable: $LIT
+                  regex: ^(["'`].*["'`]|true|false|\d+)$
+          - pattern: |
+              if ($REQ.$SRC.$NAME) { ... }
+          - pattern: |
+              if (!$REQ.$SRC.$NAME) { ... }
+          - pattern: |
+              switch ($REQ.$SRC.$NAME) { ... }
+          - pattern: |
+              $X = $REQ.$SRC.$NAME;
+              ...
+              if ($X) { ... }
+      - metavariable-regex:
+          metavariable: $SRC
+          regex: ^(query|body|params|cookies|headers)$
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^(role|is_?admin|admin|privilege|permission|authorized|auth_?level|user_?type|is_?staff|superuser)$

@@ -392,3 +392,15 @@
   "직후 문장 역참조"로 좁혀 assert·헬퍼 검사 오탐 0 실측. `vulnerable.c` 31건/13룰,
   `safe.c` 0건. 확장자 .c/.h 추가, 시드 재실행 27개 확인, 테스트 5개 추가(catalog·
   analysis 172개 통과). 못 잡는 항목·룰별 한계는 decisions.md에 taint 근거로 기록
+
+## 2026-09-05
+
+- Java·JS 룰 확장(feature/java-js-rules): 후보를 스크래치에서 Semgrep으로 먼저 실측(Java 47·
+  JS 51 정탐, safe 0)한 뒤 승인받아 `catalog/rules/java_*.yaml` 35룰·`js_*.yaml` 30룰 작성.
+  신규 실탐지 12개(IV-04·06·08·10·13·15, SF-01·10, EN-01·03·04, AA-01, 27→39). IV-15는
+  "동등 비교·진리값 분기"로 좁히고 가격류 제외, SF-01은 관리 경로·전체 허용만 — safe
+  샘플의 표시용 role·검증 후 price·/public permitAll에서 오탐 0 실측. `vulnerable.java`
+  49건/35룰, `vulnerable.js` 51건/30룰, safe 둘 다 0. 확장자 .java/.js/.jsx/.ts/.tsx 추가,
+  우리 frontend 도그푸딩 HIGH 0·LOW 8(의도된 빈 catch) 기록, CI `--exclude=frontend` 유지.
+  테스트: 언어 커버리지를 기대 건수 표에서 파생해 룰 id와 대조 — Java EN-02 샘플 누락을
+  잡아냄. 시드 재실행 39개 확인

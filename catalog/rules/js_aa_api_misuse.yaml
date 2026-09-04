@@ -1,0 +1,23 @@
+# KISA 제7절 API 오용 (AA) — JavaScript/TypeScript 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-aa-02-js-vulnerable-api
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      취약한 API 사용 (KISA-AA-02). new Buffer()·crypto.pseudoRandomBytes·fs.exists는 안전하지 않아
+      폐기된 API입니다. Buffer.alloc/from, randomBytes, fs.access(또는 바로 열기)로 바꾸세요.
+    metadata:
+      kisa_code: KISA-AA-02
+      kisa_name: 취약한 API 사용
+      cwe: CWE-477
+    # 경계: 다른 KISA 항목에 속하는 API(eval=IV-02, exec=IV-05, document.write=IV-04, md5=SF-04)는
+    # 여기서 다시 잡지 않는다 (QLT-004).
+    pattern-either:
+      - pattern: new Buffer(...)
+      - pattern: Buffer(...)
+      - pattern: crypto.pseudoRandomBytes(...)
+      - pattern: fs.exists(...)

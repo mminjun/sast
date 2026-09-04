@@ -762,3 +762,114 @@ Semgrep 문서만 읽어서는 예측할 수 없고, 실제로 돌려 JSON을 �
   실패한다. Semgrep의 C 언어는 .c와 .h를 모두 대상으로 하므로(실측: vulnerable.c를
   .h로 복사해 31건 동일) 둘 다 추가. 룰 YAML에서 파생하지 않는 이유는 기존 결정
   그대로(analysis→catalog 역의존 금지) | SFR-011, TST-008, QLT-001
+
+## 2026-09-05 (Java·JavaScript 룰 확장 — SFR-011)
+
+- **Java·JS 룰 선정 원칙: C 원칙 + "요청 값이 싱크에 직접 들어가는 형태"를 한 지점 판정으로
+  인정** | C 때의 세 기준(위험 호출 자체·인자 형태·같은 함수 안 문장 순서)에 더해, 웹
+  프레임워크에는 외부 입력의 출처가 문법으로 드러난다(`request.getParameter(...)`,
+  `req.query.x`). 그래서 이 출처가 싱크(파일·URL·헤더·응답·질의)에 **직접** 들어가거나 상수와
+  결합되는 형태까지 잡는다 — 변수를 한 번 거치면 못 잡는 것은 taint 과제로 남긴다.
+  결과: Java 35룰 / JS 30룰. (a) Python 항목의 언어별 판 21개(같은 항목, 다른 문법),
+  (b) C 항목의 판 3개(SF-03·TS-01·CE-01), (c) 언어 특유로 새로 실탐지가 된 12개(IV-04·
+  IV-06·IV-08·IV-10·IV-13·IV-15·SF-01·SF-10·EN-01·EN-03·EN-04·AA-01, 27→39). 모든 룰은
+  스크래치 프로토타입에서 취약·안전 샘플로 정탐·오탐을 실측한 뒤에야 저장소에 옮겼다 |
+  SFR-010, SFR-011, SFR-013
+- **파일·id 규칙은 C와 동일 — `java_*.yaml`/`js_*.yaml`, id에 `-java-`/`-js-` 표기** | JS 룰은
+  `languages: [javascript, typescript]`로 TS까지 같이 잡는다(Semgrep이 같은 파서 계열로
+  다룬다). 테스트의 언어 커버리지(어느 항목이 어느 언어에서 잡히는가)는 언어별 기대 건수
+  표에서 파생해 룰 id 표기와 대조한다 — 이 대조가 첫 실행에서 Java EN-02 룰만 있고 샘플
+  케이스가 없던 누락을 잡아냈다(`Thread.dumpStack()` 추가) | SFR-012, TST-005
+- **IV-15(보안결정 입력값)는 "이름 + 리터럴과 동등 비교 또는 진리값 분기"로 좁히고,
+  가격류 이름은 제외 — 실측 오탐 0** | 처음 안은 이름(role/admin/price…)만으로 잡는
+  것이었는데, 그러면 표시용 `role`이나 검증 후 쓰는 `price`도 걸린다. 권한 판단은 결국
+  `role.equals("admin")`, `req.body.isAdmin` 같은 동등 비교·진리값 분기로 나타나므로 그
+  형태로 한정했다. 가격류(price/amount/discount)는 검증 여부와 무관하게 클라이언트 값
+  자체가 문제라 이름만으로 "검증했으니 안전"과 "검증 없이 씀"을 가를 수 없어 아예 제외
+  했다(taint·업무 맥락 필요). safe 샘플에 표시용 role·검증 후 price·세션 기반 role 케이스를
+  일부러 넣어 실측 — Java·JS 모두 0건 | SFR-011, TST-005
+- **SF-01(인증 없는 중요기능)은 `anyRequest().permitAll()`과 관리성 경로 이름의
+  `permitAll()`만 — 실측 오탐 0** | permitAll 자체는 정상 설정(공개 페이지·정적 자원)에
+  흔하다. 경로 이름에 admin/manage/internal/actuator가 들어갈 때와 전체 허용만 잡고,
+  safe 샘플의 `/public/**`·`/login`·`/css/**` permitAll은 걸리지 않음을 확인했다. JS(Express)는
+  인증 미들웨어가 프레임워크 표준이 아니라 "부재"를 패턴으로 잡을 대상이 없어 제외 |
+  SFR-011
+- **프로토타입에서 걸러낸 오탐·중복과 그 처리** |
+  - IV-13(응답 분할): "파라미터를 변수에 받아 뒤에서 헤더·쿠키에 씀" 2문장 패턴이 safe
+    샘플의 `new Cookie("session_token", id)`(id는 요청값이지만 세션 쿠키 값으로 정상)를
+    잡았다. 직접 형태(`setHeader(n, getParameter(..))`, `new Cookie(n, getParameter(..))`)만
+    남김
+  - IV-04(XSS, Java): writer에 `"..." + x` 결합을 잡던 패턴이 EH-01의 `"Error: " +
+    e.getMessage()`와 같은 줄을 중복 보고했다. getParameter가 직접 들어가는 형태만 남김.
+    JS는 `res.send(f(x))`처럼 함수를 거친 값(이스케이프일 수 있음)을 제외 — `res.send(
+    escapeHtml(req.query.name))`이 오탐이었음
+  - AA-02(Java): `$T.stop()`이 모든 객체의 stop()에 걸려 `(Thread $T).stop()`으로 타입을
+    지정. JS는 `document.write`(IV-04)·`escape/unescape`(사용자 정의 함수와 충돌)를 뺌
+  - IV-01·SF-06: `metavariable-regex`는 해당 메타변수가 바인딩되지 않은 분기까지 걸러
+    낸다 — `pattern-either` 안에 `patterns`를 중첩해 regex를 해당 분기에만 걸었다. 같은
+    이유로 JS IV-15의 `$LIT` regex도 비교 분기에만 건다
+  - 결합 `"..." + x + "..."`는 최상위가 `(… + x) + "..."`라 `"..." + $X`에 안 걸린다 —
+    `<... "..." + $X ...>`(깊은 표현식)로 바꿔 잡았다(IV-01·IV-10)
+  - Java SF-14: `md.update(salt)` 뒤의 `md.digest(password.getBytes())`는 솔트를 준 것이라
+    제외 — safe 샘플이 오탐이었음
+  - CE-01(Java): 직후 문장이 `if (x.equals(...))`인 형태도 포함 — IV-15와 같은 줄을 각각
+    다른 결함(NULL 미확인 / 권한 판단)으로 보고한다. 같은 코드가 두 항목에 해당하는
+    실제 사례라 중복으로 보지 않는다 | SFR-011, QLT-004
+- **Java·JS 룰 각각이 놓치는 것 (taint 구현의 근거)** |
+  - 공통: 요청값을 변수에 받아 가공하거나 다른 메서드로 넘긴 뒤 싱크에 쓰면 못 잡는다.
+    잡는 것은 싱크 인자에 요청값이 직접 있거나 상수와 결합된 형태, 그리고 같은 메서드
+    안의 2문장(변수에 받아 바로 씀)뿐. 이것이 taint 모드(pattern-sources: getParameter/
+    req.query…, pattern-sinks: 각 룰의 싱크)로 옮길 때의 소스·싱크 목록이 된다
+  - IV-04(Java): JSP `<%= request.getParameter %>`는 Java 파서 대상이 아님. 템플릿 엔진의
+    이스케이프 해제(`th:utext`, Freemarker `?no_esc`)도 못 본다
+  - IV-08(Java): 팩토리 생성과 보안 설정이 다른 메서드에 있으면(설정 헬퍼) 오탐
+  - IV-11(Java): `csrf().disable()` 외의 우회(ignoringAntMatchers로 전체 제외)는 못 잡음
+  - SF-06: 이름 기준이라 `PASSWORD_LABEL = "Password:"` 같은 UI 문구가 오탐(C와 동일)
+  - SF-12(Java): 쿠키 생성과 setMaxAge가 다른 메서드면 못 잡음
+  - CE-02(Java): 필드에 보관하거나 헬퍼로 닫는 경우는 제외했지만 헬퍼 이름이 close가
+    아니면 오탐; 조건 분기 한쪽만 닫는 누수는 못 잡음(경로 민감 분석 필요)
+  - EN-01(Java): 서블릿 필드 대입만. Spring 싱글턴 빈의 필드에 요청 데이터를 넣는 같은
+    결함은 `@Controller` 클래스 판별이 어노테이션 기반이라 다루지 않았다
+  - EN-03/04(Java): 배열만. `List`·`Map` 등 가변 컬렉션의 참조 반환은 항목 정의(배열) 밖
+  - AA-01(Java): 호스트명 비교 형태만. 조회 결과를 변수에 받아 다른 메서드에서 판단하면
+    못 잡음
+  - IV-04(JS): `innerHTML = x`는 x가 리터럴·sanitize()가 아니면 전부 잡는다 — 서버가
+    이미 정화한 값이나 상수 조립도 걸린다(오탐 가능). React `{__html: x}`도 동일
+  - IV-07(JS): `location.href = x`는 hash/search/URLSearchParams.get이 직접 들어갈 때만.
+    변수 경유는 못 잡음
+  - SF-10(JS): `jwt.decode` 결과로 분기·`req.user =`만. decode 결과를 다른 이름으로
+    넘겨 판단하면 못 잡고, 정보 표시용 decode는 잡히지 않는다(if 분기가 없으므로)
+  - CE-01(JS): `req.query.x.trim()`처럼 즉시 메서드 호출만. `document.getElementById(..).x =`
+    는 실제로 흔한 패턴이라 오탐 소지가 있으나 KISA JS 가이드가 같은 예를 든다
+  - EH-01(JS): `err.stack`·`err.message`·`{k: err.message}`만. `res.send(err)`(객체 그대로)는
+    `$E`가 아무 값이나 매칭해 뺐다 — 못 잡는 형태 | SFR-011, RFP 외 자체 개선
+- **패턴만으로 못 잡아 제외한 Java·JS 항목과 사유** | IV-09 XML 삽입(입력이 XML 구조에
+  닿는지 taint), IV-14 정수 오버플로우(값 범위), CE-04 초기화 안 된 변수(Java는 컴파일러가
+  막고 JS는 undefined 의미 판단), EH-02 오류 대응 부재(반환값 무시 목록 필요), TS-02 무한
+  루프, SF-02 인가(자원-소유자 관계는 의미), SF-05 미암호화 전송(`http://` 리터럴은 내부망
+  등 정상 사용이 많아 오탐), SF-09 비밀번호 정책, SF-15 무결성 없는 다운로드, SF-16 시도
+  제한, CE-03 해제 후 사용(GC 언어라 해당 없음). JS의 IV-11·SF-01은 프레임워크에 "끄는"
+  스위치가 없어 부재를 패턴으로 못 잡음 | SFR-011
+- **분석 대상 확장자에 .java/.js/.jsx/.ts/.tsx 추가, CI 워크플로의 `--exclude=frontend`는
+  유지 — 프론트엔드 도그푸딩 결과 기록** | Semgrep의 javascript/typescript 언어가 이
+  확장자를 모두 대상으로 하고 React 프로젝트는 .jsx가 대부분이라 빼면 실용성이 없다.
+  자기 저장소 영향을 실측했다: 우리 `frontend/`(21파일)를 최종 JS 룰셋으로 스캔하니
+  **HIGH 0, MEDIUM 0, LOW 8** — 전부 EH-03(빈 catch)이고 `localStorage` 접근·표시용 API
+  실패를 의도적으로 무시하는 코드다(client.js 1, AuthContext 2, ProjectDashboard 1,
+  CatalogPage 1, ComparePage 2, ProjectDetailPage 1). CI에서 제외를 풀면 이 8건이 매 PR
+  '유지'로 코멘트에 떠 신호가 묻히므로 제외를 유지한다. 서버(사용자 zip)는 제외 없이
+  스캔한다 | SFR-011, TST-008, RFP 외 자체 개선
+- **언어 커버리지 대조 테스트가 실제로 일을 한 사례 — Java EN-02 샘플 누락** | 언어별
+  기대 건수 표에서 "어느 항목이 어느 언어에서 잡히는가"를 파생해 (1) 시드된 룰 id의 언어
+  표기와, (2) 네 언어 샘플을 한 번에 분석한 결과와 대조하는 테스트를 넣었다. 첫 실행에서
+  (1)이 실패했다: `kisa-en-02-java-leftover-debug-code` 룰은 있는데 vulnerable.java에
+  EN-02 케이스가 없어 기대 표에 Java가 빠져 있었다. 룰만 있고 샘플이 없으면 그 룰은
+  검증되지 않은 채 배포되는 것이라, 이 테스트가 없었으면 조용히 지나갔을 누락이다.
+  `Thread.dumpStack()`을 샘플에 추가해 해결(49건/35룰). 룰·샘플·기대 표 세 곳의 정합성을
+  사람 눈이 아니라 테스트가 지킨다는 근거로 남긴다 | TST-005, QLT-002
+- **SFR-011 "초기 분석 대상 지원"을 완료(✅)로 판정** | 9/4에는 Python·C 2개 언어로
+  부분 충족(🔨)에 두었다 — 원문이 "다양한 프로그래밍 언어 지원"이고 발표에서 유일한
+  미구현으로 말한 항목이라 판정을 후하게 보이지 않게 하려는 이유였다. 9/5 Java·JS/TS가
+  추가되어 4개 언어가 되었고, RFP가 예시로 든 Java·JS가 실제 룰·샘플·테스트로 들어갔으므로
+  원문 요건은 채웠다고 본다. 한계(문법 패턴 기반, 변수 경유 taint 미구현)는 비고에 사실로
+  남긴다 — 완료 판정이 한계를 지우는 것은 아니다 | SFR-011

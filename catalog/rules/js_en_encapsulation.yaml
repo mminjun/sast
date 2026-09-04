@@ -1,0 +1,19 @@
+# KISA 제6절 캡슐화 (EN) — JavaScript/TypeScript 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조. 패턴은 프로토타입으로
+# 정탐·오탐을 실측한 뒤 옮긴 것이며, 룰별로 무엇을 놓치는지는 docs/decisions.md
+# 2026-09-05(Java·JS 룰) 참조.
+
+rules:
+  - id: kisa-en-02-js-leftover-debug-code
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      제거되지 않고 남은 디버그 코드 (KISA-EN-02). debugger 문·console.trace가 배포 코드에 남으면 실행이 멈추거나 내부 상태가
+      노출됩니다. 배포 전에 제거하세요.
+    metadata:
+      kisa_code: KISA-EN-02
+      kisa_name: 제거되지 않고 남은 디버그 코드
+      cwe: CWE-489
+    pattern-either:
+      - pattern: debugger
+      - pattern: console.trace(...)

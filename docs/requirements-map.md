@@ -14,10 +14,10 @@
 | SFR-007 | 분석 대상 소스 관리 | ✅ | analysis/views.py `ProjectAnalysisRunsView` + frontend `ProjectDetailPage` | zip 업로드, Zip Slip 방어(SEC-008), 관리자만. 업로드 UI 완결(8/28) |
 | SFR-008 | 정적 분석 실행 | ✅ | analysis/views.py `AnalysisRunExecuteView` + frontend 실행 버튼(`ProjectDetailPage`/`RunDetailPage`) | 업로드와 분리된 2단계 트리거, 관리자만. 동기 실행 중 버튼 잠금 UI(8/28) |
 | SFR-009 | 분석 처리 체계 | ✅ | analysis/services.py `run_semgrep` | Semgrep subprocess 동기 연계. 룰셋을 `p/python`에서 자체 KISA 룰(`catalog/rules/`)로 교체 완료. `--no-git-ignore`·`PYTHONUTF8=1`·`encoding='utf-8'` 필요 (docs/decisions.md 외부 도구 연계 문제) |
-| SFR-010 | 분석 언어 확장성 | ✅ | catalog/rules + catalog 전반 | 완료(9/2 판정 조정, decisions.md) — 요구는 "확장 가능한 구조"이고 카탈로그 49개는 언어 중립, 파서·모델·API에 언어 분기 없이 룰 YAML 추가만으로 확장, 엔진이 다중 언어 지원. 실제 추가 언어 룰 작성은 SFR-011로 분리 — 9/4 C 룰 추가로 실증(같은 항목 7개를 Python·C 룰이 각각 탐지, 코드 변경 0) |
-| SFR-011 | 초기 분석 대상 지원 | 🔨 | catalog/rules/c_*.yaml, `catalog/samples/vulnerable.c`·`safe.c`, settings `ANALYSIS_SCAN_TARGET_SUFFIXES` | 부분 충족 — Python·C 2개 언어 구현(9/4 C 룰 13개: 신규 실탐지 6개 IV-16·IV-17·SF-03·TS-01·CE-01·CE-03 + Python 항목의 C 판 7개, .c/.h 인식). Java/JS 등 추가 확장은 룰 세트 추가로 가능. 패턴만으로 못 잡는 항목(IV-14·IV-03·CE-04 등)과 사유는 decisions.md 9/4 |
+| SFR-010 | 분석 언어 확장성 | ✅ | catalog/rules + catalog 전반 | 완료(9/2 판정 조정, decisions.md) — 요구는 "확장 가능한 구조"이고 카탈로그 49개는 언어 중립, 파서·모델·API에 언어 분기 없이 룰 YAML 추가만으로 확장, 엔진이 다중 언어 지원. 실제 추가 언어 룰 작성은 SFR-011로 분리 — 9/4 C, 9/5 Java·JS 룰 추가로 실증(같은 항목을 최대 4개 언어 룰이 각각 탐지, 파서·모델·API 변경 0) |
+| SFR-011 | 초기 분석 대상 지원 | ✅ | catalog/rules/{c,java,js}_*.yaml, `catalog/samples/vulnerable.{c,java,js}`·`safe.*`, settings `ANALYSIS_SCAN_TARGET_SUFFIXES` | 완료(9/5 판정, decisions.md) — Python·C·Java·JS/TS 4개 언어 구현: 9/4 C 룰 13개(신규 실탐지 6개), 9/5 Java 35룰·JS 30룰(신규 실탐지 12개, 합계 39/49). 확장자 .py/.c/.h/.java/.js/.jsx/.ts/.tsx. 한계: 룰은 문법 패턴 기반이라 변수 경유(taint)는 미구현 — 못 잡는 항목과 룰별 한계는 decisions.md 9/4·9/5 |
 | SFR-012 | 진단 항목 등록 | ✅ | catalog/management/commands/seed_catalog.py | 룰 YAML 1개 추가 + 시드 재실행이면 코드 수정 없이 카탈로그 반영. kisa_code 오타는 시드 시점에 실패(드리프트 감지) |
-| SFR-013 | 진단 기준 카탈로그 | ✅ | catalog/models.py `DiagnosticRule` + `/api/catalog/rules/` + frontend `CatalogPage` | 49개 전부 등록, 그중 27개 실탐지(8/29 룰 8개 추가, 9/4 C 룰로 6개 추가). 유형·심각도·구현여부 필터, `/api/catalog/summary/` 집계. 49개 표시·필터 UI 완결(8/28). 심각도 범례 카드(등급 정책·폴백 각주, 8/29) |
+| SFR-013 | 진단 기준 카탈로그 | ✅ | catalog/models.py `DiagnosticRule` + `/api/catalog/rules/` + frontend `CatalogPage` | 49개 전부 등록, 그중 39개 실탐지(8/29 룰 8개 추가, 9/4 C 룰로 6개, 9/5 Java·JS 룰로 12개 추가). 유형·심각도·구현여부 필터, `/api/catalog/summary/` 집계. 49개 표시·필터 UI 완결(8/28). 심각도 범례 카드(등급 정책·폴백 각주, 8/29) |
 | SFR-014 | 분석 결과 표준화 | ✅ | catalog/services.py `ingest_findings` | raw_result → Finding. 실행 성공 시 시그널로 자동 연결, 멱등. 관리자용 재표준화 API 별도 |
 | SFR-015 | 분석 실행 상태 관리 | ✅ | analysis/models.py `AnalysisStatus` + frontend `StatusBadge` | 대기/실행중/완료/실패 4상태. 원자적 전환으로 RUNNING 관측 가능. 4상태 배지 UI 표시(8/28) |
 | SFR-016 | 분석 결과 조회 | ✅ | catalog/views.py `RunFindingListView`/`RunFindingSummaryView` + frontend `RunDetailPage` | 실행별 결과 목록 + 심각도·항목별 집계. 심각도 높은 순 정렬. 집계 카드·목록·코드조각 UI 완결(8/28) |
@@ -58,7 +58,7 @@
 | TST-002 | 역할 권한 시험 | ✅ | accounts/tests.py — 일반 사용자 403, 역할 강등 즉시 반영. 시연 필수. + 브라우저 E2E — 일반 계정에 관리 버튼 미노출, 프로젝트 생성 시도 403(8/28). + 사용자 관리 API 권한 29개 케이스(미인증 401, 일반 균일 403, 강등 즉시 403, role 강제, 자기 자신·마지막 admin·409, 비활성화 즉시 효력)(8/28 저녁) |
 | TST-003 | 프로젝트 접근 시험 | ✅ | projects/tests.py `IdorDefenseTests` 등 22개. curl 수동 시연: 할당 200 / 미할당·미존재 동일 404 / 쓰기 균일 403. + 브라우저 E2E — 미할당 프로젝트 목록 숨김 + 상세 URL 직접 접근 404(IDOR 차단)(8/28) |
 | TST-004 | 분석 처리 시험 | ✅ | analysis/tests.py 30개 + 실서버 수동 시연 — 업로드→압축해제→Semgrep 실행→결과조회 관통 |
-| TST-005 | 진단 항목 시험 | ✅ | catalog/tests.py `DetectionSampleTests` — 실제 Semgrep으로 `catalog/samples/vulnerable.py` 정탐 31건/21룰(8/29 확장), `safe.py` **오탐 0건**; C는 `vulnerable.c` 정탐 31건/13룰, `safe.c` **오탐 0건**(assert·헬퍼 함수 NULL 검사 케이스 포함, 9/4). 두 언어 동시 분석 시 공유 항목 7개가 양쪽 파일에서 잡히는지도 확인. 시연 핵심 |
+| TST-005 | 진단 항목 시험 | ✅ | catalog/tests.py `DetectionSampleTests` — 실제 Semgrep으로 `catalog/samples/vulnerable.py` 정탐 31건/21룰(8/29 확장), `safe.py` **오탐 0건**; C는 `vulnerable.c` 정탐 31건/13룰, `safe.c` **오탐 0건**(assert·헬퍼 함수 NULL 검사 케이스 포함, 9/4); Java `vulnerable.java` 49건/35룰, JS `vulnerable.js` 51건/30룰, safe 둘 다 **0건**(표시용 role·검증 후 price·/public permitAll 오탐 케이스 포함, 9/5). 네 언어 동시 분석 시 항목별 언어 커버리지가 기대 표와 일치하는지도 확인. 시연 핵심 |
 | TST-006 | 카탈로그 시험 | ✅ | catalog/tests.py `SeedCatalogTests`·`SeedValidationTests`·`CatalogReadTests` — 49개 등록·유형 분포·멱등·드리프트 감지·조회 필터 |
 | TST-007 | 분석 결과 관리 시험 | ✅ | catalog/tests.py `IngestTests`·`FindingReadTests`·`ReingestTests`·`PaginationTests` — 변환·멱등·필터·집계·재표준화 |
 | TST-008 | 오류 처리 시험 | ✅ | 기본 수준 — 잘못된 필터 400, 원본 없는 재표준화 409, 미존재 404, 표준화 실패 시 실행 보존+로그. 8/29: zip 아닌 파일 업로드 400 거부·분석 대상 0개(빈 zip 포함) 실행 시 Semgrep 미호출 FAILED+사유 저장(analysis/tests.py 2건). 검증 대상 3종 테스트 고정 — 상태(깨진 zip 400, 빈 zip FAILED), 오류 정보(error_message 저장), 재확인 절차(FAILED 재실행 `test_failed_run_can_be_retried`). 응답 포맷 통일은 QLT-004 후순위로 분리 |
@@ -90,12 +90,12 @@
 
 ## 현황 요약 (2026-09-02 기준)
 
-- SFR 17개: 완료 16 / 부분 충족 1(SFR-011 — Python·C 2개 언어 구현, 9/4. Java/JS 등은 룰 세트 추가로 확장 가능, plan.md §5)
+- SFR 17개: 완료 17 (SFR-011은 9/5 Java·JS 룰로 4개 언어가 되어 완료 판정 — decisions.md)
 - DAR 10개: 완료 10 (DAR-008은 9/2 판정 조정 — decisions.md)
 - SEC 10개: 완료 10 (SEC-006·009는 plan.md §5의 "기본 수준" 기준)
 - TST 8개: 완료 8
 - QLT 5개: 완료 5
-- **합계: 50개 중 완료 49 / 부분 충족 1** (9/2 판정 조정으로 47→49, DAR-008·SFR-010; SFR-011은 9/4 C 룰로 부분 충족 — decisions.md)
+- **합계: 50개 중 완료 50** (9/2 판정 조정으로 47→49, DAR-008·SFR-010; 9/5 SFR-011 완료로 50 — decisions.md)
 - 테스트: **269개 전부 통과** (accounts 56 · projects 33 · analysis 42 · catalog 125 · scripts 13 — 9/4 기준)
 - 프론트엔드: 7화면 완결 — 로그인 / 프로젝트 목록 / 프로젝트 상세(대시보드 포함) /
   실행 결과 상세 / 실행 비교 / 카탈로그 / 사용자 관리. 관리자·일반 계정 브라우저 E2E로
