@@ -5,9 +5,25 @@ analysis 앱이 Semgrep 원본 JSON(AnalysisRun.raw_result)까지만 책임지�
 KISA 49개 기준에 맞춰 표준화하는 것은 여기부터다 (QLT-001 책임 분리).
 """
 
+from django.conf import settings
 from django.db import models
 
 from analysis.models import AnalysisRun
+
+
+class FindingStatus(models.TextChoices):
+    """진단 결과 1건에 대한 사람의 판정 (RFP 외 자체 개선 — 오탐 관리, docs/decisions.md 2026-09-05).
+
+    정적 분석은 오탐이 구조적으로 나온다. 판정을 결과에 붙여 두고 다음 회차의 같은
+    finding(핑거프린트 동일)에 승계해, 같은 건을 회차마다 다시 보지 않게 한다.
+    - OPEN: 아직 판정하지 않음 (기본값)
+    - FALSE_POSITIVE: 오탐 — 실행 간 비교(diff) 집계에서 뺀다
+    - ACCEPTED: 실제 취약점이지만 알고 두기로 함 — 여전히 존재하므로 집계에 남긴다
+    """
+
+    OPEN = 'OPEN', '미처리'
+    FALSE_POSITIVE = 'FALSE_POSITIVE', '오탐'
+    ACCEPTED = 'ACCEPTED', '수용'
 
 
 class Severity(models.TextChoices):
@@ -168,6 +184,29 @@ class Finding(models.Model):
     # 룰 metadata에서 가져온 cwe·references 등 (DAR-009).
     extra = models.JSONField('부가정보', default=dict, blank=True)
 
+    # 사람의 판정 (오탐 관리). 같은 프로젝트의 직전 완료 실행에서 같은 핑거프린트의
+    # 판정을 승계하고, 재표준화 때는 자기 run의 판정을 먼저 보존한다 — 규칙은
+    # catalog/services.py ingest_findings 한 곳에만 둔다.
+    status = models.CharField(
+        '판정',
+        max_length=16,
+        choices=FindingStatus.choices,
+        default=FindingStatus.OPEN,
+        db_index=True,
+    )
+    status_note = models.CharField('판정 사유', max_length=200, blank=True)
+    # 승계돼도 "누가 언제 처음 판정했는지"가 남아야 하므로 승계 시 원본 값을 그대로
+    # 복사한다. 사용자를 지우면 판정의 책임 소재가 사라지므로 PROTECT.
+    status_changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='finding_status_changes',
+        null=True,
+        blank=True,
+        verbose_name='판정자',
+    )
+    status_changed_at = models.DateTimeField('판정 일시', null=True, blank=True)
+
     created_at = models.DateTimeField('생성 일시', auto_now_add=True)
 
     class Meta:
@@ -180,6 +219,8 @@ class Finding(models.Model):
             # 심각도 필터(SFR-017)와 항목별 집계가 항상 run 단위로 걸린다.
             models.Index(fields=('run', 'severity'), name='catalog_finding_run_sev'),
             models.Index(fields=('run', 'rule'), name='catalog_finding_run_rule'),
+            # 판정 필터도 run 단위다.
+            models.Index(fields=('run', 'status'), name='catalog_finding_run_status'),
         ]
 
     def __str__(self):

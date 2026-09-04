@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { api, ApiError } from '../api/client.js';
 import DiffStatusBadge from '../components/DiffStatusBadge.jsx';
+import FindingStatusBadge from '../components/FindingStatusBadge.jsx';
 import SeverityBadge from '../components/SeverityBadge.jsx';
 import { formatDateTime } from '../utils/format.js';
 
@@ -92,6 +93,8 @@ export default function ComparePage() {
   if (!diff) return <p className="muted">불러오는 중…</p>;
 
   const excludedTotal = (diff.excluded?.base || 0) + (diff.excluded?.target || 0);
+  const falsePositiveTotal =
+    (diff.false_positive?.base || 0) + (diff.false_positive?.target || 0);
 
   return (
     <>
@@ -121,6 +124,16 @@ export default function ComparePage() {
       {excludedTotal > 0 && (
         <p className="muted small">
           일부 항목({excludedTotal}건)이 비교에서 제외되었습니다 (비교 키가 없는 이전 데이터).
+        </p>
+      )}
+      {/* 오탐 판정은 신규/해결/유지 어디에도 넣지 않는다 — 수용(ACCEPTED)은 여전히 존재하는
+          취약점이라 집계에 남고 행에 배지로만 표시된다. */}
+      {falsePositiveTotal > 0 && (
+        <p className="muted small">
+          {/* 양쪽 합계를 쓰지 않는다 — 같은 finding이 기준·대상에 하나씩 있으면 "2건"으로
+              읽혀 서로 다른 두 건처럼 보인다. 쪽별 건수만 보여준다. */}
+          오탐으로 판정된 항목이 비교에서 제외되었습니다 (기준 {diff.false_positive?.base || 0}건,
+          대상 {diff.false_positive?.target || 0}건). 판정은 각 분석의 결과 화면에서 바꿀 수 있습니다.
         </p>
       )}
       {/* 두 실행이 전혀 겹치지 않으면 서로 다른 소스를 올렸을 가능성이 크다 — 경고가
@@ -201,6 +214,12 @@ export default function ComparePage() {
               <tr key={`${item.status}-${index}`}>
                 <td>
                   <DiffStatusBadge status={item.status} />
+                  {item.finding_status === 'ACCEPTED' && (
+                    <>
+                      {' '}
+                      <FindingStatusBadge status="ACCEPTED" />
+                    </>
+                  )}
                 </td>
                 <td>
                   {item.rule_code ? (

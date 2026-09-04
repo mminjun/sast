@@ -8,8 +8,10 @@
 없다 — 인증만 요구한다.
 """
 
+from django.db import transaction
 from django.db.models import Case, Count, IntegerField, Q, Value, When
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
@@ -24,12 +26,15 @@ from config.access_log import log_access
 
 from projects.models import Project
 
-from .models import DiagnosticRule, Finding, KisaCategory, Severity
-from .serializers import DiagnosticRuleSerializer, FindingSerializer
-from .services import diff_findings, ingest_findings, run_change_counts
+from .models import DiagnosticRule, Finding, FindingStatus, KisaCategory, Severity
+from .serializers import DiagnosticRuleSerializer, FindingSerializer, FindingStatusSerializer
+from .services import (
+    diff_findings, ingest_findings, previous_succeeded_run, run_change_counts,
+)
 
 CATEGORY_VALUES = set(KisaCategory.values)
 SEVERITY_VALUES = set(Severity.values)
+FINDING_STATUS_VALUES = set(FindingStatus.values)
 
 # 심각도 정렬용 순위. CharField라 사전순으로 정렬하면 HIGH < LOW < MEDIUM이 되어
 # 위험한 항목이 가운데 묻힌다 — 보안 대시보드는 높은 것이 위에 와야 한다.
@@ -259,6 +264,10 @@ class RunFindingListView(RunFindingsMixin, generics.ListAPIView):
             # 검색되어야 한다.
             queryset = queryset.filter(rule_code=code)
 
+        finding_status = _require_choice(params.get('status'), FINDING_STATUS_VALUES, 'status')
+        if finding_status:
+            queryset = queryset.filter(status=finding_status)
+
         keyword = (params.get('q') or '').strip()
         if keyword:
             queryset = queryset.filter(
@@ -302,12 +311,20 @@ class RunFindingSummaryView(RunFindingsMixin, APIView):
             .order_by('severity_rank', '-total', 'rule_code')
         ]
 
+        # 판정별 건수 — 상태 필터 칩의 숫자용. 등급과 같은 이유로 0건도 키를 채운다.
+        status_counts = dict(findings.values_list('status').annotate(n=Count('id')))
+        by_status = [
+            {'status': value, 'label': label, 'total': status_counts.get(value, 0)}
+            for value, label in FindingStatus.choices
+        ]
+
         return Response({
             'run': run.pk,
             'status': run.status,
             'total': findings.count(),
             'by_severity': by_severity,
             'by_rule': by_rule,
+            'by_status': by_status,
         })
 
 
@@ -345,20 +362,9 @@ class RunDiffView(RunFindingsMixin, APIView):
         """비교 기준 실행. ?base= 명시가 없으면 같은 프로젝트의 직전 완료 실행."""
         raw = (request.query_params.get('base') or '').strip()
         if not raw:
-            previous = (
-                AnalysisRun.objects
-                .filter(project_id=target.project_id, status=AnalysisStatus.SUCCEEDED)
-                .exclude(pk=target.pk)
-                # "직전"은 생성 시각 기준, 동시각이면 pk로 — 자동 선택이 요청마다
-                # 다른 실행을 고르면 diff 결과가 재현되지 않는다.
-                .filter(
-                    Q(created_at__lt=target.created_at)
-                    | Q(created_at=target.created_at, pk__lt=target.pk)
-                )
-                .order_by('-created_at', '-pk')
-                .first()
-            )
-            return previous, True
+            # "직전"의 정의는 services.previous_succeeded_run 한 곳에 둔다 — 판정 승계가
+            # 같은 실행을 기준으로 삼아야 "비교에서 유지인데 판정은 승계 안 됨"이 없다.
+            return previous_succeeded_run(target), True
 
         if not raw.isdigit():
             raise ValidationError({'base': ['실행 id(정수)여야 합니다.']})
@@ -437,4 +443,52 @@ class RunFindingReingestView(RunFindingsMixin, APIView):
             'created': result.created,
             'skipped': result.skipped,
             'unmapped': result.unmapped,
+            # 재표준화 전 판정·직전 실행 판정에서 물려받은 건수 — 마킹이 보존됐는지
+            # 응답만으로 확인할 수 있게.
+            'carried': result.carried,
         })
+
+
+class FindingStatusView(APIView):
+    """진단 결과 1건의 판정 변경 — 오탐/수용/미처리 (RFP 외 자체 개선, 관리자 전용).
+
+    결과 조회는 할당된 일반 사용자도 할 수 있지만, 판정은 "이 취약점은 무시한다"를
+    결정하는 관리 행위라 관리자만 한다 (SEC-003의 해석 — docs/decisions.md 2026-09-05).
+    변경은 접근 로그에 남긴다 — 누가 무엇을 오탐으로 돌렸는지가 추적돼야 한다.
+    """
+
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def patch(self, request, finding_id):
+        serializer = FindingStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        with transaction.atomic():
+            # finding은 스코프된 run을 통해서만 찾는다 — 스코프 밖과 미존재가 같은
+            # 404 (SEC-005, SEC-006). 관리자는 전체 스코프라 사실상 존재 확인이지만
+            # 다른 결과 뷰와 같은 경로를 탄다.
+            finding = get_object_or_404(
+                Finding.objects.select_related('rule', 'run'),
+                pk=finding_id,
+                run__in=_scoped_analysis_runs(request.user),
+            )
+            # 같은 run의 재표준화(ingest_findings)와 직렬화한다. 재표준화는 findings를
+            # 전부 지우고 다시 넣는데, 그 DELETE와 INSERT 사이에 이 UPDATE가 끼면
+            # 곧 지워질 행에 쓰여 판정이 조용히 사라진다. ingest가 잠그는 것과 같은
+            # 행(AnalysisRun)을 같은 순서로 잠가 교착 없이 순서가 정해진다.
+            AnalysisRun.objects.select_for_update().get(pk=finding.run_id)
+            finding.status = data['status']
+            finding.status_note = data['note']
+            # OPEN으로 되돌릴 때도 갱신한다 — 되돌린 사람과 시각이 기록돼야 한다.
+            finding.status_changed_by = request.user
+            finding.status_changed_at = timezone.now()
+            finding.save(update_fields=(
+                'status', 'status_note', 'status_changed_by', 'status_changed_at',
+            ))
+
+        log_access(
+            request.user, 'finding_status',
+            run_id=finding.run_id, project_id=finding.run.project_id,
+        )
+        return Response(FindingSerializer(finding).data)

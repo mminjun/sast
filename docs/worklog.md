@@ -404,3 +404,10 @@
   우리 frontend 도그푸딩 HIGH 0·LOW 8(의도된 빈 catch) 기록, CI `--exclude=frontend` 유지.
   테스트: 언어 커버리지를 기대 건수 표에서 파생해 룰 id와 대조 — Java EN-02 샘플 누락을
   잡아냄. 시드 재실행 39개 확인
+- 오탐 관리(feature/finding-status): Finding에 status/status_note/status_changed_by/at 추가
+  (0004). ingest_findings가 삭제 전에 자기 run 판정을 모아 먼저 입히고(OPEN 포함) 새 핑거프린트만
+  직전 완료 실행에서 승계 — 되돌림이 재표준화로 취소되는 문제를 막음. `previous_succeeded_run`
+  으로 diff 기준 선택과 규칙 공유. PATCH /api/findings/{id}/status/(관리자, 접근 로그, run 행
+  잠금), 목록 status 필터, summary by_status, diff·변화량에서 오탐 제외(false_positive 키)·수용
+  포함. 화면: 판정 칩·컬럼·관리자 편집기, 비교 페이지 오탐 제외 안내. 테스트 20개 추가
+  (전체 299개 통과)

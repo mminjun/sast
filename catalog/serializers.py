@@ -7,7 +7,7 @@ Semgrep 실행 결과를 표준화한 것이라 API로 수정할 대상이 아�
 
 from rest_framework import serializers
 
-from .models import DiagnosticRule, Finding
+from .models import DiagnosticRule, Finding, FindingStatus
 
 
 class DiagnosticRuleSerializer(serializers.ModelSerializer):
@@ -56,11 +56,20 @@ class FindingSerializer(serializers.ModelSerializer):
     # 점 표기 source 대신 명시적으로 처리한다.
     category = serializers.SerializerMethodField()
     category_label = serializers.SerializerMethodField()
+    # 판정(오탐 관리). 쓰기는 별도 엔드포인트(FindingStatusSerializer)로만 — 이 응답은
+    # 여전히 읽기 전용이다.
+    status_label = serializers.CharField(source='get_status_display', read_only=True)
+    status_changed_by = serializers.SerializerMethodField()
 
     class Meta:
         model = Finding
         fields = (
             'id',
+            'status',
+            'status_label',
+            'status_note',
+            'status_changed_by',
+            'status_changed_at',
             # 분석 시점 스냅샷 — 기준이 나중에 개정돼도 이 분석이 무엇을 보고했는지 남는다.
             'rule_code',
             'rule_name',
@@ -85,3 +94,21 @@ class FindingSerializer(serializers.ModelSerializer):
 
     def get_category_label(self, finding):
         return finding.rule.get_category_display() if finding.rule_id else ''
+
+    def get_status_changed_by(self, finding):
+        # 접근 로그와 같은 식별자(email)로 내려준다 — 화면의 "누가 판정했나"와 로그를
+        # 같은 값으로 대조할 수 있게.
+        return finding.status_changed_by.email if finding.status_changed_by_id else None
+
+
+class FindingStatusSerializer(serializers.Serializer):
+    """판정 변경 입력 (PATCH /api/findings/{id}/status/, 관리자 전용).
+
+    Finding 전체를 쓰기 가능하게 열지 않고 판정 두 필드만 받는다 — 표준화된 결과
+    본문(경로·줄·메시지)은 여전히 API로 수정할 대상이 아니다.
+    """
+
+    status = serializers.ChoiceField(choices=FindingStatus.choices)
+    note = serializers.CharField(
+        max_length=200, allow_blank=True, required=False, default='', trim_whitespace=True,
+    )

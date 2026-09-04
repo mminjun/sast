@@ -20,10 +20,12 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from django.conf import settings
+from django.utils import timezone
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -39,8 +41,10 @@ from analysis.signals import run_succeeded
 from projects.models import Project, ProjectMember
 
 from .fingerprint import backfill_fingerprints, base_fingerprint
-from .models import DiagnosticRule, Finding, KisaCategory, Severity
-from .services import bare_check_id, ingest_findings, normalize_severity
+from .models import DiagnosticRule, Finding, FindingStatus, KisaCategory, Severity
+from .services import (
+    bare_check_id, ingest_findings, normalize_severity, previous_succeeded_run,
+)
 from .views import FindingPagination
 
 User = get_user_model()
@@ -163,6 +167,10 @@ def diff_url(run_id):
 
 def run_changes_url(project_id):
     return reverse('catalog:project-run-changes', args=[project_id])
+
+
+def finding_status_url(finding_id):
+    return reverse('catalog:finding-status', args=[finding_id])
 
 
 def semgrep_result(path, kisa_code, line=1, severity='ERROR', check_id=None, message='m'):
@@ -1334,6 +1342,243 @@ class DetectionSampleTests(WorkspaceMixin, TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 오탐 관리 — 판정 승계·재표준화 보존·판정 API (RFP 외 자체 개선, decisions.md 2026-09-05)
+# ---------------------------------------------------------------------------
+
+class StatusCarryOverTests(WorkspaceMixin, TestCase):
+    """판정(OPEN/FALSE_POSITIVE/ACCEPTED)이 회차를 넘어 승계되고 재표준화에도 보존되는지.
+
+    실제 ingest를 거쳐 fingerprint가 같은 finding을 두 실행에 만든다 — 같은 상대경로에
+    같은 내용의 파일을 두면 핑거프린트(룰|경로|조각)가 일치한다.
+    """
+
+    SOURCE = 'app/db.py'
+    CONTENT = 'cursor.execute("SELECT " + name)\n'
+
+    def setUp(self):
+        super().setUp()
+        seed()
+        self.setup_workspace()
+        self.admin = User.objects.create_user(
+            email='admin@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        self.reviewer = User.objects.create_user(
+            email='reviewer@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        self.project = Project.objects.create(name='p', created_by=self.admin)
+        self.first = self.make_run(self.project, self.admin)
+        self.ingest(self.first)
+
+    def ingest(self, run, content=None):
+        target = self.write_source(run, self.SOURCE, content or self.CONTENT)
+        run.raw_result = {'results': [semgrep_result(target, 'KISA-IV-01')]}
+        run.save(update_fields=['raw_result'])
+        return ingest_findings(run)
+
+    def mark(self, run, status_value, note='fixture', by=None, at=None):
+        finding = Finding.objects.get(run=run)
+        finding.status = status_value
+        finding.status_note = note
+        finding.status_changed_by = by or self.admin
+        finding.status_changed_at = at or timezone.now()
+        finding.save()
+        return finding
+
+    def test_false_positive_is_inherited_with_original_reviewer(self):
+        when = timezone.now() - timedelta(days=3)
+        self.mark(self.first, FindingStatus.FALSE_POSITIVE, note='테스트 픽스처', at=when)
+
+        second = self.make_run(self.project, self.admin)
+        result = self.ingest(second)
+
+        finding = Finding.objects.get(run=second)
+        self.assertEqual(result.carried, 1)
+        self.assertEqual(finding.status, FindingStatus.FALSE_POSITIVE)
+        self.assertEqual(finding.status_note, '테스트 픽스처')
+        # 누가 언제 처음 판정했는지가 회차를 넘어 남는다.
+        self.assertEqual(finding.status_changed_by, self.admin)
+        self.assertEqual(finding.status_changed_at, when)
+
+    def test_accepted_is_inherited_too(self):
+        self.mark(self.first, FindingStatus.ACCEPTED, note='다음 분기 수정')
+        second = self.make_run(self.project, self.admin)
+        self.ingest(second)
+        self.assertEqual(Finding.objects.get(run=second).status, FindingStatus.ACCEPTED)
+
+    def test_open_is_not_inherited(self):
+        # 미판정은 물려줄 것이 없다 — 판정자·시각도 비어 있어야 한다.
+        second = self.make_run(self.project, self.admin)
+        result = self.ingest(second)
+        finding = Finding.objects.get(run=second)
+        self.assertEqual(result.carried, 0)
+        self.assertEqual(finding.status, FindingStatus.OPEN)
+        self.assertIsNone(finding.status_changed_by)
+        self.assertIsNone(finding.status_changed_at)
+
+    def test_different_fingerprint_is_not_inherited(self):
+        self.mark(self.first, FindingStatus.FALSE_POSITIVE)
+        second = self.make_run(self.project, self.admin)
+        self.ingest(second, content='cursor.execute("DELETE " + name)\n')  # 조각이 다르다
+        self.assertEqual(Finding.objects.get(run=second).status, FindingStatus.OPEN)
+
+    def test_other_project_and_failed_runs_are_ignored(self):
+        other_project = Project.objects.create(name='q', created_by=self.admin)
+        other = self.make_run(other_project, self.admin)
+        self.ingest(other)
+        self.mark(other, FindingStatus.FALSE_POSITIVE)
+
+        failed = self.make_run(self.project, self.admin, status_value=AnalysisStatus.FAILED)
+        self.ingest(failed)
+        self.mark(failed, FindingStatus.FALSE_POSITIVE)
+
+        second = self.make_run(self.project, self.admin)
+        self.ingest(second)
+        # first는 OPEN이고, 판정된 건 다른 프로젝트·실패 실행뿐 — 아무것도 승계되지 않는다.
+        self.assertEqual(Finding.objects.get(run=second).status, FindingStatus.OPEN)
+
+    def test_reingest_preserves_marking_and_is_idempotent(self):
+        """제일 중요한 보장 — 재표준화가 findings를 지우고 다시 넣어도 판정이 남는다."""
+        when = timezone.now() - timedelta(hours=1)
+        self.mark(self.first, FindingStatus.FALSE_POSITIVE, note='fixture', by=self.reviewer,
+                  at=when)
+
+        for _ in range(2):
+            result = self.ingest(self.first)
+            finding = Finding.objects.get(run=self.first)
+            self.assertEqual(result.carried, 1)
+            self.assertEqual(finding.status, FindingStatus.FALSE_POSITIVE)
+            self.assertEqual(finding.status_note, 'fixture')
+            self.assertEqual(finding.status_changed_by, self.reviewer)
+            self.assertEqual(finding.status_changed_at, when)
+        self.assertEqual(Finding.objects.filter(run=self.first).count(), 1)
+
+    def test_reverting_to_open_survives_reingest(self):
+        """①(자기 run의 판정, OPEN 포함) > ②(직전 실행) — 되돌림이 재표준화로 취소되면 안 된다."""
+        self.mark(self.first, FindingStatus.FALSE_POSITIVE)
+        second = self.make_run(self.project, self.admin)
+        self.ingest(second)
+        self.assertEqual(Finding.objects.get(run=second).status, FindingStatus.FALSE_POSITIVE)
+
+        reverted_at = timezone.now()
+        self.mark(second, FindingStatus.OPEN, note='실제 취약점으로 재판정', by=self.reviewer,
+                  at=reverted_at)
+        self.ingest(second)
+
+        finding = Finding.objects.get(run=second)
+        self.assertEqual(finding.status, FindingStatus.OPEN)
+        self.assertEqual(finding.status_note, '실제 취약점으로 재판정')
+        self.assertEqual(finding.status_changed_by, self.reviewer)
+        self.assertEqual(finding.status_changed_at, reverted_at)
+
+    def test_previous_run_rule_matches_diff_base_selection(self):
+        """승계 기준 실행과 diff의 자동 비교 기준이 같은 실행이어야 한다."""
+        second = self.make_run(self.project, self.admin)
+        self.make_run(self.project, self.admin, status_value=AnalysisStatus.FAILED)
+        third = self.make_run(self.project, self.admin)
+        self.assertEqual(previous_succeeded_run(third), second)
+        self.assertEqual(previous_succeeded_run(second), self.first)
+        self.assertIsNone(previous_succeeded_run(self.first))
+
+
+class FindingStatusApiTests(CatalogApiTestCase):
+    """PATCH /api/findings/{id}/status/ — 관리자 전용 판정 변경, 목록 필터, 집계."""
+
+    def setUp(self):
+        super().setUp()
+        self.finding = self.add_finding(fingerprint='fpA:1')
+
+    def patch_status(self, finding_id=None, **body):
+        return self.client.patch(
+            finding_status_url(finding_id or self.finding.pk), body, format='json',
+        )
+
+    def test_admin_marks_false_positive_with_note(self):
+        self.login(self.admin)
+        response = self.patch_status(status='FALSE_POSITIVE', note='테스트 픽스처')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'FALSE_POSITIVE')
+        self.assertEqual(response.data['status_label'], '오탐')
+        self.assertEqual(response.data['status_note'], '테스트 픽스처')
+        self.assertEqual(response.data['status_changed_by'], self.admin.email)
+        self.assertIsNotNone(response.data['status_changed_at'])
+        self.finding.refresh_from_db()
+        self.assertEqual(self.finding.status, FindingStatus.FALSE_POSITIVE)
+        self.assertEqual(self.finding.status_changed_by, self.admin)
+
+    @patch('catalog.views.log_access')
+    def test_status_change_is_logged(self, mock_log):
+        self.login(self.admin)
+        self.patch_status(status='ACCEPTED')
+        mock_log.assert_called_once_with(
+            self.admin, 'finding_status', run_id=self.run.pk, project_id=self.project.pk,
+        )
+
+    def test_member_cannot_change_status(self):
+        """결과 열람은 되지만 판정은 관리 행위다 (SEC-003)."""
+        self.login(self.member)
+        response = self.patch_status(status='FALSE_POSITIVE')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.finding.refresh_from_db()
+        self.assertEqual(self.finding.status, FindingStatus.OPEN)
+
+    def test_unknown_finding_is_404(self):
+        self.login(self.admin)
+        response = self.patch_status(finding_id=self.finding.pk + 1000, status='ACCEPTED')
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invalid_status_and_long_note_are_rejected(self):
+        self.login(self.admin)
+        self.assertEqual(self.patch_status(status='MAYBE').status_code,
+                         status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.patch_status(status='ACCEPTED', note='x' * 201).status_code,
+                         status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.patch_status(note='no status').status_code,
+                         status.HTTP_400_BAD_REQUEST)
+
+    def test_revert_to_open_records_who_reverted(self):
+        self.login(self.admin)
+        self.patch_status(status='FALSE_POSITIVE', note='fixture')
+        response = self.patch_status(status='OPEN')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'OPEN')
+        self.assertEqual(response.data['status_note'], '')
+        self.assertEqual(response.data['status_changed_by'], self.admin.email)
+
+    def test_list_filters_by_status_and_rejects_unknown_value(self):
+        accepted = self.add_finding(file_path='app/b.py', fingerprint='fpB:1',
+                                    status=FindingStatus.ACCEPTED)
+        self.login(self.member)
+        response = self.client.get(findings_url(self.run.pk), {'status': 'ACCEPTED'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([row['id'] for row in response.data['results']], [accepted.pk])
+        self.assertEqual(
+            self.client.get(findings_url(self.run.pk), {'status': 'BOGUS'}).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_list_exposes_status_fields_to_readers(self):
+        self.login(self.member)
+        row = self.client.get(findings_url(self.run.pk)).data['results'][0]
+        for key in ('status', 'status_label', 'status_note', 'status_changed_by',
+                    'status_changed_at'):
+            self.assertIn(key, row)
+        self.assertEqual(row['status'], 'OPEN')
+        self.assertIsNone(row['status_changed_by'])
+
+    def test_summary_reports_counts_by_status(self):
+        self.add_finding(file_path='app/b.py', fingerprint='fpB:1',
+                         status=FindingStatus.FALSE_POSITIVE)
+        self.login(self.member)
+        data = self.client.get(
+            reverse('catalog:run-finding-summary', args=[self.run.pk])).data
+        self.assertEqual(
+            {row['status']: row['total'] for row in data['by_status']},
+            {'OPEN': 1, 'FALSE_POSITIVE': 1, 'ACCEPTED': 0},
+        )
+
+
+# ---------------------------------------------------------------------------
 # 문서 동기화
 # ---------------------------------------------------------------------------
 
@@ -1565,6 +1810,31 @@ class RunDiffTests(CatalogApiTestCase):
         self.assertEqual(response.data['summary'],
                          {'new': 1, 'resolved': 0, 'persisted': 0})
 
+    def test_false_positive_is_excluded_and_reported_separately(self):
+        """오탐 판정은 신규/해결/유지 어디에도 섞이지 않고, 빈 키 제외와 다른 키로 보고된다."""
+        self.add_finding(run=self.base_run, fingerprint='fpA:1',
+                         status=FindingStatus.FALSE_POSITIVE)
+        self.add_finding(run=self.target_run, fingerprint='fpA:1',
+                         status=FindingStatus.FALSE_POSITIVE)
+        self.add_finding(run=self.target_run, file_path='app/c.py', fingerprint='fpC:1')
+
+        response = self.diff(base=self.base_run.pk)
+        self.assertEqual(response.data['summary'], {'new': 1, 'resolved': 0, 'persisted': 0})
+        self.assertEqual(response.data['false_positive'], {'base': 1, 'target': 1})
+        self.assertEqual(response.data['excluded'], {'base': 0, 'target': 0})
+        self.assertEqual([item['file_path'] for item in response.data['items']], ['app/c.py'])
+
+    def test_accepted_stays_in_diff_with_its_status(self):
+        """수용은 알지만 고치지 않은 것 — 여전히 존재하므로 집계에 남고 판정만 표시된다."""
+        self.add_finding(run=self.base_run, fingerprint='fpA:1')
+        self.add_finding(run=self.target_run, fingerprint='fpA:1', status=FindingStatus.ACCEPTED)
+
+        response = self.diff(base=self.base_run.pk)
+        self.assertEqual(response.data['summary'], {'new': 0, 'resolved': 0, 'persisted': 1})
+        item = response.data['items'][0]
+        self.assertEqual(item['status'], 'persisted')
+        self.assertEqual(item['finding_status'], 'ACCEPTED')
+
     def test_empty_fingerprint_is_excluded_not_matched(self):
         """빈 값끼리 서로 짝지어지는 사고를 막는다 — 제외하고 그 사실을 표시."""
         self.add_finding(run=self.base_run)    # fingerprint 기본값 ''
@@ -1630,6 +1900,22 @@ class RunChangesTests(CatalogApiTestCase):
         self.assertEqual(
             response.data['changes'],
             {self.second_run.pk: {'new': 0, 'resolved': 0}},
+        )
+
+    def test_false_positive_is_excluded_from_changes(self):
+        """diff_findings와 같은 규칙 — 목록의 변화량과 비교 화면 수치가 어긋나지 않게."""
+        self.add_finding(run=self.run, file_path='app/a.py', fingerprint='fpA:1',
+                         status=FindingStatus.FALSE_POSITIVE)
+        self.add_finding(run=self.second_run, file_path='app/c.py', fingerprint='fpC:1',
+                         status=FindingStatus.FALSE_POSITIVE)
+        self.add_finding(run=self.second_run, file_path='app/d.py', fingerprint='fpD:1',
+                         status=FindingStatus.ACCEPTED)
+
+        response = self.client.get(run_changes_url(self.project.pk))
+        # 오탐 둘은 빠지고(해결 0, 신규 0), 수용은 신규로 남는다.
+        self.assertEqual(
+            response.data['changes'],
+            {self.second_run.pk: {'new': 1, 'resolved': 0}},
         )
 
     def test_scope_hides_unassigned_project(self):
