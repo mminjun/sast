@@ -1,0 +1,157 @@
+# KISA 제5절 코드오류 (CE) — C 실탐지 룰 (SFR-010, SFR-011)
+# 매핑·심각도·한계 원칙은 c_iv_input_validation.yaml 머리말 참조.
+#
+# 이 절의 룰은 모두 "같은 함수 안"에서 판정한다 — 해제·할당과 사용이 함수 경계를
+# 넘으면(호출자가 해제, 헬퍼가 검사) 문법 패턴으로는 닿지 않는다 (docs/decisions.md).
+
+rules:
+  - id: kisa-ce-01-c-null-dereference
+    languages: [c]
+    severity: WARNING
+    message: >-
+      Null Pointer 역참조 (KISA-CE-01). 할당·열기 결과를 NULL 확인 없이 바로 사용하고
+      있습니다. malloc/fopen은 실패 시 NULL을 돌려주므로 사용 전에 검사하세요.
+    metadata:
+      kisa_code: KISA-CE-01
+      kisa_name: Null Pointer 역참조
+      cwe: CWE-476
+    # 범위를 "할당 직후 바로 다음 문장에서 역참조"로 좁힌다. 사이에 문장이 하나라도
+    # 있으면(assert(p), 헬퍼 함수 검사, 로그 등) 검사일 수 있으므로 잡지 않는다 —
+    # 놓치는 것보다 오탐(safe 샘플 0건)을 우선한다.
+    pattern-either:
+      - pattern: |
+          $P = malloc(...);
+          $P->$FIELD = $V;
+      - pattern: |
+          $P = malloc(...);
+          *$P = $V;
+      - pattern: |
+          $P = malloc(...);
+          $P[$I] = $V;
+      - pattern: |
+          $P = malloc(...);
+          strcpy($P, ...);
+      - pattern: |
+          $P = malloc(...);
+          memcpy($P, ...);
+      - pattern: |
+          $P = calloc(...);
+          $P->$FIELD = $V;
+      - pattern: |
+          $P = calloc(...);
+          $P[$I] = $V;
+      - pattern: |
+          $P = realloc(...);
+          $P->$FIELD = $V;
+      - pattern: |
+          $P = realloc(...);
+          $P[$I] = $V;
+      - pattern: |
+          $F = fopen(...);
+          fgets(..., $F);
+      - pattern: |
+          $F = fopen(...);
+          fread(..., $F);
+      - pattern: |
+          $F = fopen(...);
+          fwrite(..., $F);
+      - pattern: |
+          $F = fopen(...);
+          fprintf($F, ...);
+      - pattern: |
+          $F = fopen(...);
+          fscanf($F, ...);
+      - pattern: |
+          $F = fopen(...);
+          $C = fgetc($F);
+
+  - id: kisa-ce-02-c-resource-leak
+    languages: [c]
+    severity: WARNING
+    message: >-
+      부적절한 자원 해제 (KISA-CE-02). 연 파일 핸들을 같은 함수에서 닫지 않습니다.
+      모든 반환 경로에서 fclose 하거나, 핸들을 호출자에게 돌려주세요.
+    metadata:
+      kisa_code: KISA-CE-02
+      kisa_name: 부적절한 자원 해제
+      cwe: CWE-772
+    patterns:
+      # Python 룰(kisa-ce-02-resource-leak)과 같은 구조 — 핸들을 변수로 든 뒤 같은
+      # 블록에서 fclose도 return도 하지 않으면 누수로 본다. 핸들을 구조체·전역에
+      # 보관하거나 다른 함수에 넘겨 닫는 경우는 잡지 않는다(오탐 억제).
+      - pattern: $FD = fopen(...);
+      - pattern-not-inside: |
+          $FD = fopen(...);
+          ...
+          fclose($FD);
+      - pattern-not-inside: |
+          $FD = fopen(...);
+          ...
+          return $FD;
+      - pattern-not-inside: |
+          $FD = fopen(...);
+          ...
+          $OBJ->$FIELD = $FD;
+      - pattern-not-inside: |
+          $FD = fopen(...);
+          ...
+          $GLOBAL = $FD;
+
+  - id: kisa-ce-03-c-use-after-free
+    languages: [c]
+    severity: ERROR
+    message: >-
+      해제된 자원 사용 (KISA-CE-03). free한 포인터를 같은 함수에서 다시 사용하거나
+      두 번 해제하고 있습니다. free 직후 포인터를 NULL로 두고, 이후 접근을 없애세요.
+    metadata:
+      kisa_code: KISA-CE-03
+      kisa_name: 해제된 자원 사용
+      cwe: CWE-416
+    patterns:
+      - pattern-either:
+          # 이중 해제
+          - pattern: |
+              free($P);
+              ...
+              free($P);
+          # 역참조
+          - pattern: |
+              free($P);
+              ...
+              $P->$FIELD = $V;
+          - pattern: |
+              free($P);
+              ...
+              $X = $P->$FIELD;
+          - pattern: |
+              free($P);
+              ...
+              *$P = $V;
+          - pattern: |
+              free($P);
+              ...
+              $X = *$P;
+          - pattern: |
+              free($P);
+              ...
+              $P[$I] = $V;
+          - pattern: |
+              free($P);
+              ...
+              $X = $P[$I];
+          # 해제된 포인터를 다른 함수에 넘김
+          - pattern: |
+              free($P);
+              ...
+              $FN(..., $P, ...);
+          - pattern: |
+              free($P);
+              ...
+              $X = $FN(..., $P, ...);
+      # free 뒤에 같은 포인터를 다시 할당(p = NULL, p = malloc(...))했으면 그 이후의
+      # 사용은 새 값이다 — 제외한다. 별칭(q = p 뒤 free(p), q 사용)은 잡지 못한다.
+      - pattern-not: |
+          free($P);
+          ...
+          $P = $NEW;
+          ...

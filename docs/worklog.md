@@ -386,3 +386,9 @@
 - CI 게이트 PR #3(feature/ci-gate → main) 생성, 통과 코멘트 확인. 시연 PR #4(demo/ci-gate-block →
   feature/ci-gate)는 의도적 SQL 삽입 1건이 신규 HIGH로 잡혀 26초 만에 실패·차단 코멘트 확인.
   그 화면을 `docs/images/ci-gate-blocked.png`로 저장(README 참조). 시연 PR은 닫고 브랜치 삭제
+- C/C++ 룰 확장(feature/c-rules): 후보 12+1개를 스크래치에서 Semgrep C 모드로 먼저
+  실측한 뒤 승인받아 `catalog/rules/c_*.yaml` 5파일 13룰 작성. 신규 실탐지 6개
+  (IV-16·IV-17·SF-03·TS-01·CE-01·CE-03, 21→27) + Python 항목의 C 판 7개. CE-01은
+  "직후 문장 역참조"로 좁혀 assert·헬퍼 검사 오탐 0 실측. `vulnerable.c` 31건/13룰,
+  `safe.c` 0건. 확장자 .c/.h 추가, 시드 재실행 27개 확인, 테스트 5개 추가(catalog·
+  analysis 172개 통과). 못 잡는 항목·룰별 한계는 decisions.md에 taint 근거로 기록

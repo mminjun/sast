@@ -57,13 +57,21 @@ _UNSET = object()
 CATEGORY_COUNTS = {'IV': 17, 'SF': 16, 'TS': 2, 'EH': 3, 'CE': 5, 'EN': 4, 'AA': 2}
 SEVERITY_COUNTS = {'HIGH': 26, 'MEDIUM': 20, 'LOW': 3}
 
-# 실탐지 룰이 붙은 항목 (선정 근거는 docs/decisions.md — 8/27 최초 13개, 8/29 확장).
+# 실탐지 룰이 붙은 항목 (선정 근거는 docs/decisions.md — 8/27 최초 13개, 8/29 확장,
+# 9/4 C 룰로 6개 추가: IV-16, IV-17, SF-03, TS-01, CE-01, CE-03).
 IMPLEMENTED_CODES = {
     'KISA-IV-01', 'KISA-IV-02', 'KISA-IV-03', 'KISA-IV-05', 'KISA-IV-07', 'KISA-IV-11',
-    'KISA-IV-12',
-    'KISA-SF-04', 'KISA-SF-06', 'KISA-SF-07', 'KISA-SF-08', 'KISA-SF-11', 'KISA-SF-12',
-    'KISA-SF-13', 'KISA-SF-14',
-    'KISA-CE-02', 'KISA-CE-05', 'KISA-EH-01', 'KISA-EH-03', 'KISA-EN-02',
+    'KISA-IV-12', 'KISA-IV-16', 'KISA-IV-17',
+    'KISA-SF-03', 'KISA-SF-04', 'KISA-SF-06', 'KISA-SF-07', 'KISA-SF-08', 'KISA-SF-11',
+    'KISA-SF-12', 'KISA-SF-13', 'KISA-SF-14',
+    'KISA-TS-01',
+    'KISA-CE-01', 'KISA-CE-02', 'KISA-CE-03', 'KISA-CE-05', 'KISA-EH-01', 'KISA-EH-03',
+    'KISA-EN-02',
+    'KISA-AA-02',
+}
+# Python·C 두 언어 모두에서 잡는 항목 — SFR-010 "룰 추가만으로 언어 확장"의 실증.
+SHARED_LANGUAGE_CODES = {
+    'KISA-IV-05', 'KISA-SF-04', 'KISA-SF-06', 'KISA-SF-08', 'KISA-SF-13', 'KISA-CE-02',
     'KISA-AA-02',
 }
 # 취약 샘플에서 나와야 하는 룰별 건수. 총 31건.
@@ -73,6 +81,14 @@ EXPECTED_SAMPLE_FINDINGS = {
     'KISA-SF-04': 1, 'KISA-SF-06': 2, 'KISA-SF-07': 2, 'KISA-SF-08': 1, 'KISA-SF-11': 2,
     'KISA-SF-12': 1, 'KISA-SF-13': 1, 'KISA-SF-14': 1,
     'KISA-CE-02': 1, 'KISA-CE-05': 2, 'KISA-EH-01': 2, 'KISA-EH-03': 2, 'KISA-EN-02': 2,
+    'KISA-AA-02': 2,
+}
+# C 취약 샘플(vulnerable.c)에서 나와야 하는 룰별 건수. 총 31건 / 13룰 (SFR-011).
+EXPECTED_C_SAMPLE_FINDINGS = {
+    'KISA-IV-05': 2, 'KISA-IV-16': 5, 'KISA-IV-17': 3,
+    'KISA-SF-03': 4, 'KISA-SF-04': 2, 'KISA-SF-06': 2, 'KISA-SF-08': 2, 'KISA-SF-13': 1,
+    'KISA-TS-01': 2,
+    'KISA-CE-01': 2, 'KISA-CE-02': 1, 'KISA-CE-03': 3,
     'KISA-AA-02': 2,
 }
 
@@ -205,6 +221,13 @@ class SeedCatalogTests(TestCase):
             DiagnosticRule.objects.implemented().values_list('code', flat=True)
         )
         self.assertEqual(implemented, IMPLEMENTED_CODES)
+
+    def test_item_can_carry_rules_for_several_languages(self):
+        """한 항목에 언어별 룰이 여러 개 붙는다 — 카탈로그는 언어 중립 (SFR-010)."""
+        for code in SHARED_LANGUAGE_CODES:
+            ids = DiagnosticRule.objects.get(code=code).semgrep_rule_ids
+            self.assertTrue(any('-c-' in rule_id for rule_id in ids), (code, ids))
+            self.assertTrue(any('-c-' not in rule_id for rule_id in ids), (code, ids))
 
     def test_implemented_queryset_agrees_with_property(self):
         """쿼리셋 판정과 프로퍼티 판정이 갈라지면 필터 결과와 상세 표시가 어긋난다."""
@@ -1179,6 +1202,38 @@ class DetectionSampleTests(WorkspaceMixin, TestCase):
         self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
         self.assertEqual(
             list(Finding.objects.filter(run=run).values_list('file_path', 'rule_code')), [])
+
+    def test_vulnerable_c_sample_triggers_every_c_rule(self):
+        """C 룰 13개 정탐 (SFR-011, TST-005)."""
+        run = self.analyze('vulnerable.c')
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+
+        counts = {}
+        for finding in Finding.objects.filter(run=run):
+            counts[finding.rule_code] = counts.get(finding.rule_code, 0) + 1
+        self.assertEqual(counts, EXPECTED_C_SAMPLE_FINDINGS)
+
+    def test_safe_c_sample_produces_no_findings(self):
+        """C 오탐 통제. safe.c에는 CE-01의 '몇 줄 뒤 검사'(assert·헬퍼 함수) 케이스가
+        일부러 들어 있다 — 여기서 걸리면 룰 범위를 더 좁히거나 항목을 내려야 한다."""
+        run = self.analyze('safe.c')
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+        self.assertEqual(
+            list(Finding.objects.filter(run=run).values_list('file_path', 'rule_code')), [])
+
+    def test_shared_items_are_detected_in_both_languages(self):
+        """같은 진단 항목을 Python·C 룰이 각각 잡는다 — 언어 확장이 카탈로그·모델 변경
+        없이 룰 추가만으로 이뤄졌다는 실증 (SFR-010, SFR-011)."""
+        run = self.analyze('vulnerable.py', 'vulnerable.c')
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+
+        for code in SHARED_LANGUAGE_CODES:
+            suffixes = {
+                Path(path).suffix
+                for path in Finding.objects.filter(run=run, rule_code=code)
+                                           .values_list('file_path', flat=True)
+            }
+            self.assertEqual(suffixes, {'.py', '.c'}, code)
 
     def test_catalog_severity_overrides_tool_severity(self):
         """도구 등급과 카탈로그 등급이 실제로 충돌하는 두 항목으로 확인한다 (QLT-004)."""

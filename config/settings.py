@@ -239,11 +239,11 @@ ANALYSIS_SEMGREP_CONFIG = str(CATALOG_RULES_DIR)
 # 초 — 타임아웃 시 FAILED로 기록. 수천 파일 규모 프로젝트는 2분으로 부족해 .env로 조정한다.
 ANALYSIS_SEMGREP_TIMEOUT = int(os.getenv('ANALYSIS_SEMGREP_TIMEOUT', '600'))
 
-# 분석 대상 언어 파일 확장자. 현재 카탈로그 룰 21개가 전부 languages: [python]이라
-# .py 하나다 — 다른 언어 룰을 추가하면 여기도 함께 갱신한다 (SFR-012, TST-008).
+# 분석 대상 언어 파일 확장자. 카탈로그 룰이 다루는 언어(Python: .py, C: .c/.h)와
+# 맞춘다 — 다른 언어 룰을 추가하면 여기도 함께 갱신한다 (SFR-011, SFR-012, TST-008).
 # 룰 YAML에서 동적으로 파생하지 않는 이유: analysis 앱이 catalog의 룰 파일을 읽으면
 # 역방향 의존이 생긴다 (QLT-001).
-ANALYSIS_SCAN_TARGET_SUFFIXES = ('.py',)
+ANALYSIS_SCAN_TARGET_SUFFIXES = ('.py', '.c', '.h')
 
 
 # 접근 로그 (RFP 요구 아님 — 열람 이력 추적용 자체 개선, docs/decisions.md 2026-09-01)

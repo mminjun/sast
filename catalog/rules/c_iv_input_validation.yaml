@@ -1,0 +1,91 @@
+# KISA 제1절 입력데이터 검증 및 표현 (IV) — C 실탐지 룰 (SFR-010, SFR-011)
+#
+# Python 룰(iv_input_validation.yaml)과 같은 매핑·심각도 원칙을 따른다. 한 항목에
+# 언어별 룰이 여러 개 붙을 수 있고(IV-05는 Python·C 둘 다), 카탈로그는 언어 중립이라
+# kisa_code만 같으면 시드 재실행으로 같은 항목에 묶인다.
+#
+# 문법 패턴만으로 판정하는 룰이다 — 값의 크기·출처(taint)는 추적하지 않는다. 각 룰이
+# 무엇을 놓치는지는 docs/decisions.md 2026-09-04(C 룰) 참조.
+
+rules:
+  - id: kisa-iv-05-c-os-command-injection
+    languages: [c]
+    severity: ERROR
+    message: >-
+      운영체제 명령어 삽입 (KISA-IV-05). 변수로 조립한 문자열을 셸 명령으로 실행하고
+      있습니다. system/popen 대신 execv 계열로 인자를 분리해 넘기고, 외부 입력은
+      허용 목록으로 검증하세요.
+    metadata:
+      kisa_code: KISA-IV-05
+      kisa_name: 운영체제 명령어 삽입
+      cwe: CWE-78
+    patterns:
+      - pattern-either:
+          - pattern: system($CMD)
+          - pattern: popen($CMD, ...)
+          # 셸을 거쳐 문자열 한 덩어리를 실행하는 형태만 잡는다.
+          - pattern: execl("...", "...", "-c", $CMD, ...)
+          - pattern: execlp("...", "...", "-c", $CMD, ...)
+      # 상수 문자열만 넘기는 호출은 외부 입력이 섞일 수 없으므로 제외한다 (오탐 억제).
+      - pattern-not: system("...")
+      - pattern-not: popen("...", ...)
+      - pattern-not: execl("...", "...", "-c", "...", ...)
+      - pattern-not: execlp("...", "...", "-c", "...", ...)
+
+  - id: kisa-iv-16-c-unbounded-copy
+    languages: [c]
+    severity: ERROR
+    message: >-
+      메모리 버퍼 오버플로우 (KISA-IV-16). 길이 제한 없이 버퍼에 쓰는 함수입니다.
+      gets는 fgets로, strcpy/strcat은 strncpy/strncat 또는 snprintf로, sprintf는
+      snprintf로, scanf의 %s는 폭을 지정한 %Ns로 바꾸세요.
+    metadata:
+      kisa_code: KISA-IV-16
+      kisa_name: 메모리 버퍼 오버플로우
+      cwe: CWE-120
+    pattern-either:
+      # 목적지 크기를 받지 않아 어떤 인자로도 안전하게 만들 수 없는 함수들.
+      - pattern: gets(...)
+      - pattern: strcpy(...)
+      - pattern: strcat(...)
+      - pattern: sprintf(...)
+      - pattern: vsprintf(...)
+      # scanf 계열은 폭 없는 %s만 잡는다 — "%15s"처럼 폭이 있으면 제외.
+      - patterns:
+          - pattern-either:
+              - pattern: scanf($FMT, ...)
+              - pattern: fscanf($STREAM, $FMT, ...)
+              - pattern: sscanf($SRC, $FMT, ...)
+          - metavariable-regex:
+              metavariable: $FMT
+              # % 바로 뒤에 폭(숫자) 없이 길이 수식자만 거쳐 s로 끝나는 변환.
+              regex: '.*%[hlLqjzt]*s.*'
+
+  - id: kisa-iv-17-c-format-string
+    languages: [c]
+    severity: ERROR
+    message: >-
+      포맷 스트링 삽입 (KISA-IV-17). 포맷 문자열 자리에 변수를 그대로 넘기고 있습니다.
+      "%s"를 포맷으로 두고 값을 인자로 넘기세요 — 예: printf("%s", msg).
+    metadata:
+      kisa_code: KISA-IV-17
+      kisa_name: 포맷 스트링 삽입
+      cwe: CWE-134
+    patterns:
+      - pattern-either:
+          - pattern: printf($FMT, ...)
+          - pattern: fprintf($STREAM, $FMT, ...)
+          - pattern: snprintf($BUF, $N, $FMT, ...)
+          - pattern: vprintf($FMT, ...)
+          - pattern: vfprintf($STREAM, $FMT, ...)
+          - pattern: vsnprintf($BUF, $N, $FMT, ...)
+          - pattern: syslog($PRIO, $FMT, ...)
+      # sprintf/vsprintf는 IV-16(길이 제한 없는 쓰기)이 이미 보고한다 — 같은 호출을
+      # 두 항목이 중복 보고하지 않도록 여기서는 다루지 않는다 (QLT-004).
+      - pattern-not: printf("...", ...)
+      - pattern-not: fprintf($STREAM, "...", ...)
+      - pattern-not: snprintf($BUF, $N, "...", ...)
+      - pattern-not: vprintf("...", ...)
+      - pattern-not: vfprintf($STREAM, "...", ...)
+      - pattern-not: vsnprintf($BUF, $N, "...", ...)
+      - pattern-not: syslog($PRIO, "...", ...)

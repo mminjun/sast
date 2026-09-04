@@ -545,6 +545,21 @@ class ExecuteStatusTests(AnalysisTestCase):
         mock_run.assert_not_called()
 
     @patch('analysis.services.subprocess.run')
+    def test_zip_with_only_c_sources_is_scanned(self, mock_run):
+        """C 룰이 붙은 뒤로 .c/.h만 든 zip도 분석 대상이다 (SFR-011, TST-008)."""
+        run_id = self._upload(entries={'main.c': 'int main(void) { return 0; }\n',
+                                       'util.h': '#define X 1\n'})
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = json.dumps({'results': [], 'errors': []})
+        mock_run.return_value.stderr = ''
+
+        response = self.client.post(execute_url(run_id))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], AnalysisStatus.SUCCEEDED)
+        mock_run.assert_called_once()
+
+    @patch('analysis.services.subprocess.run')
     def test_zip_without_supported_files_marks_failed_without_running_semgrep(self, mock_run):
         run_id = self._upload(entries={'readme.md': '# docs only\n'})
 
