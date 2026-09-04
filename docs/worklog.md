@@ -374,3 +374,12 @@
   핑거프린트 불변 테스트 포함 4개 추가(catalog 125개 통과), vite build 확인
 - 다음: 기존 실행은 재실행해야 문맥이 붙음. taint 모드 룰 전환 검토
 
+- 업로드/실행 500 3종 수정(9a24b95): Windows 261자 경로 → `\\?\` 확장 경로로 추출·스캔·
+  조각 읽기(일반 경로면 Semgrep이 260자 초과 파일을 조용히 누락하는 것도 실험으로 확인),
+  macOS `__MACOSX/`·`._*`·`.DS_Store` 추출 제외, Semgrep 출력·조각의 NUL 제거(jsonb
+  거부로 RUNNING 고착). 검증 밖 추출 실패 시 PENDING 행·디렉토리 정리. 테스트 5개 추가
+- CI 게이트(feature/ci-gate): PR마다 base·head 두 번 스캔 → `scripts/sast_gate.py`가
+  서버 핑거프린트 모듈을 import해 신규/해결/유지 분류 → summary·PR 코멘트, 신규 HIGH면
+  실패. 조각 읽기를 `catalog/snippet.py`로 분리해 서버와 공유. 저장소 자체 스캔 122건 중
+  샘플·픽스처 제외 시 1건(access_log.py EH-03 LOW, 의도된 코드)만 남아 깨끗한 기준선.
+  gh CLI 설치. 스크립트 테스트 13개
