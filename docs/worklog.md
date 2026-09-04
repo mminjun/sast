@@ -383,3 +383,6 @@
   실패. 조각 읽기를 `catalog/snippet.py`로 분리해 서버와 공유. 저장소 자체 스캔 122건 중
   샘플·픽스처 제외 시 1건(access_log.py EH-03 LOW, 의도된 코드)만 남아 깨끗한 기준선.
   gh CLI 설치. 스크립트 테스트 13개
+- CI 게이트 PR #3(feature/ci-gate → main) 생성, 통과 코멘트 확인. 시연 PR #4(demo/ci-gate-block →
+  feature/ci-gate)는 의도적 SQL 삽입 1건이 신규 HIGH로 잡혀 26초 만에 실패·차단 코멘트 확인.
+  그 화면을 `docs/images/ci-gate-blocked.png`로 저장(README 참조). 시연 PR은 닫고 브랜치 삭제
