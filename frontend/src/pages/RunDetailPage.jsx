@@ -4,11 +4,60 @@ import { Link, useParams } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import CodeSnippet from '../components/CodeSnippet.jsx';
+import FindingStatusBadge, { FINDING_STATUS_LABELS } from '../components/FindingStatusBadge.jsx';
 import SeverityBadge from '../components/SeverityBadge.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { formatDateTime, formatUser } from '../utils/format.js';
 
 const PAGE_SIZE = 50; // 서버 FindingPagination.page_size와 동일
+const FINDING_STATUSES = Object.keys(FINDING_STATUS_LABELS); // OPEN, FALSE_POSITIVE, ACCEPTED
+
+/** 관리자용 행 안 판정 편집기 — 저장하면 PATCH 응답으로 그 행만 교체한다. */
+function StatusEditor({ finding, onSaved }) {
+  const [value, setValue] = useState(finding.status || 'OPEN');
+  const [note, setNote] = useState(finding.status_note || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const dirty = value !== (finding.status || 'OPEN') || note !== (finding.status_note || '');
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const updated = await api(`/api/findings/${finding.id}/status/`, {
+        method: 'PATCH',
+        body: { status: value, note },
+      });
+      onSaved(updated);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : '판정을 저장하지 못했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="status-editor">
+      <select value={value} onChange={(e) => setValue(e.target.value)} disabled={saving}>
+        {FINDING_STATUSES.map((s) => (
+          <option key={s} value={s}>{FINDING_STATUS_LABELS[s]}</option>
+        ))}
+      </select>
+      <input
+        placeholder="사유 (선택, 200자)"
+        maxLength={200}
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        disabled={saving}
+      />
+      <button type="button" className="btn" disabled={!dirty || saving} onClick={save}>
+        {saving ? '저장 중…' : '저장'}
+      </button>
+      {error && <span className="form-error small">{error}</span>}
+    </div>
+  );
+}
 
 export default function RunDetailPage() {
   const { id } = useParams();
@@ -17,6 +66,7 @@ export default function RunDetailPage() {
   const [summary, setSummary] = useState(null);
   const [findings, setFindings] = useState(null); // {count, results}
   const [severity, setSeverity] = useState(''); // '' = 전체
+  const [findingStatus, setFindingStatus] = useState(''); // '' = 전체 (판정 필터)
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
   const [executing, setExecuting] = useState(false);
@@ -44,15 +94,31 @@ export default function RunDetailPage() {
   useEffect(() => {
     const params = new URLSearchParams();
     if (severity) params.set('severity', severity);
+    if (findingStatus) params.set('status', findingStatus);
     params.set('page', String(page));
     api(`/api/analysis-runs/${id}/findings/?${params}`)
       .then(setFindings)
       .catch(() => setFindings({ count: 0, results: [] }));
-  }, [id, severity, page]);
+  }, [id, severity, findingStatus, page]);
 
   const changeSeverity = (value) => {
     setSeverity(value);
     setPage(1); // 필터가 바뀌면 페이지 범위도 바뀐다 — 1페이지부터.
+  };
+
+  const changeFindingStatus = (value) => {
+    setFindingStatus(value);
+    setPage(1);
+  };
+
+  // 판정 저장 후: 목록의 그 행만 교체하고 상단 판정 건수만 다시 읽는다 (전체 재조회 없음).
+  const replaceFinding = (updated) => {
+    setFindings((current) =>
+      current
+        ? { ...current, results: current.results.map((f) => (f.id === updated.id ? updated : f)) }
+        : current
+    );
+    api(`/api/analysis-runs/${id}/findings/summary/`).then(setSummary).catch(() => {});
   };
 
   const handleExecute = async () => {
@@ -63,6 +129,7 @@ export default function RunDetailPage() {
       await loadRunAndSummary();
       setPage(1);
       setSeverity('');
+      setFindingStatus('');
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : '실행 요청에 실패했습니다.');
     } finally {
@@ -149,6 +216,28 @@ export default function RunDetailPage() {
         ))}
       </div>
 
+      {/* 판정 필터 — 오탐으로 표시한 건을 걷어내고 보거나, 오탐만 모아 검토한다. */}
+      <div className="filter-row">
+        <span className="muted">판정:</span>
+        <button
+          type="button"
+          className={`chip ${findingStatus === '' ? 'chip-active' : ''}`}
+          onClick={() => changeFindingStatus('')}
+        >
+          전체 ({totalAll})
+        </button>
+        {summary?.by_status?.map((s) => (
+          <button
+            key={s.status}
+            type="button"
+            className={`chip ${findingStatus === s.status ? 'chip-active' : ''}`}
+            onClick={() => changeFindingStatus(s.status)}
+          >
+            {s.label} ({s.total})
+          </button>
+        ))}
+      </div>
+
       {findings === null && <p className="muted">결과 불러오는 중…</p>}
       {findings?.count === 0 && (
         <p className="muted">
@@ -163,6 +252,7 @@ export default function RunDetailPage() {
           <thead>
             <tr>
               <th>심각도</th>
+              <th>판정</th>
               <th>진단 항목</th>
               <th>위치</th>
               <th>내용</th>
@@ -173,6 +263,23 @@ export default function RunDetailPage() {
               <tr key={f.id}>
                 <td>
                   <SeverityBadge severity={f.severity} label={f.severity_label} />
+                </td>
+                <td>
+                  <FindingStatusBadge
+                    status={f.status}
+                    label={f.status_label}
+                    title={
+                      f.status_changed_by
+                        ? `${f.status_changed_by} · ${formatDateTime(f.status_changed_at)}`
+                        : undefined
+                    }
+                  />
+                  {f.status_note && (
+                    <span className="muted small status-note">{f.status_note}</span>
+                  )}
+                  {isAdmin && (
+                    <StatusEditor key={`${f.id}-${f.status}-${f.status_note}`} finding={f} onSaved={replaceFinding} />
+                  )}
                 </td>
                 <td>
                   {f.rule_code ? (

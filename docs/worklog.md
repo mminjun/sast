@@ -404,3 +404,20 @@
   우리 frontend 도그푸딩 HIGH 0·LOW 8(의도된 빈 catch) 기록, CI `--exclude=frontend` 유지.
   테스트: 언어 커버리지를 기대 건수 표에서 파생해 룰 id와 대조 — Java EN-02 샘플 누락을
   잡아냄. 시드 재실행 39개 확인
+- 오탐 관리(feature/finding-status): Finding에 status/status_note/status_changed_by/at 추가
+  (0004). ingest_findings가 삭제 전에 자기 run 판정을 모아 먼저 입히고(OPEN 포함) 새 핑거프린트만
+  직전 완료 실행에서 승계 — 되돌림이 재표준화로 취소되는 문제를 막음. `previous_succeeded_run`
+  으로 diff 기준 선택과 규칙 공유. PATCH /api/findings/{id}/status/(관리자, 접근 로그, run 행
+  잠금), 목록 status 필터, summary by_status, diff·변화량에서 오탐 제외(false_positive 키)·수용
+  포함. 화면: 판정 칩·컬럼·관리자 편집기, 비교 페이지 오탐 제외 안내. 테스트 20개 추가
+  (전체 299개 통과). PR #7
+- 도그푸딩 완결 — 오탐이 나온다 → 관리 기능을 만들었다 → 실제로 그 오탐을 정리했다.
+  현재 소스(142파일, venv·media·frontend 빌드 제외)를 "SAST 자체 분석 (도그푸딩)" 프로젝트에
+  올려 실행(#4): 229건(HIGH 160·MEDIUM 52·LOW 17). 파일별로는 catalog/samples 4개 162건,
+  accounts/tests.py 38건(전부 SF-06 픽스처 비밀번호), catalog/tests.py 11건 — 운영 코드는
+  access_log.py EH-03 1건뿐. accounts/tests.py의 SF-06 38건을 API로 오탐 판정(사유 "테스트
+  픽스처 비밀번호 — 실제 자격증명 아님") 후 같은 zip을 다시 실행(#5): 38건 전부 승계(사유·
+  판정자·시각 원본 유지), summary OPEN 191 / FALSE_POSITIVE 38, diff는 유지 191·오탐 제외
+  base 38·target 38·신규 0. 남은 191건은 catalog/samples(의도적 취약 샘플)·catalog/tests.py
+  픽스처가 대부분 — 이건 "오탐"이 아니라 분석 대상 밖이라 CI처럼 업로드 시 제외하는 편이
+  맞고, 다음 과제(업로드 제외 경로 설정)의 근거로 남긴다

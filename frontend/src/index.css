@@ -516,6 +516,47 @@ td.truncate-sm {
   color: #374151;
 }
 
+/* 진단 결과 판정 (오탐 관리) — 미처리는 눈에 띄지 않게, 오탐은 회색 취소선 느낌, 수용은 파랑 */
+.fstatus-open {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.fstatus-false_positive {
+  background: #e5e7eb;
+  color: #4b5563;
+  text-decoration: line-through;
+}
+
+.fstatus-accepted {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+/* 행 안 판정 편집기 (관리자) */
+.status-editor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  margin-top: 0.35rem;
+}
+
+.status-editor select,
+.status-editor input {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+}
+
+.status-editor input {
+  min-width: 10rem;
+}
+
+.status-note {
+  display: block;
+  margin-top: 0.2rem;
+}
+
 .role-user {
   background: #e5e7eb;
   color: #374151;

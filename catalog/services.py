@@ -12,13 +12,13 @@ from collections import Counter, namedtuple
 from pathlib import Path
 
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 
 from analysis.models import AnalysisRun, AnalysisStatus
 from analysis.services import fs_path, source_dir, strip_extended_prefix, strip_nul
 
 from .fingerprint import assign_fingerprints
-from .models import DiagnosticRule, Finding, Severity
+from .models import DiagnosticRule, Finding, FindingStatus, Severity
 # 코드 조각 읽기 규칙(줄 수·길이 상한, 문맥)은 catalog/snippet.py 한 곳에 있다 —
 # CI 게이트(scripts/sast_gate.py)도 같은 함수로 조각을 만들어야 핑거프린트가 맞는다.
 from .snippet import read_snippet
@@ -30,7 +30,8 @@ SEMGREP_SEVERITY_FALLBACK = {
     'INFO': Severity.LOW,
 }
 
-IngestResult = namedtuple('IngestResult', 'created skipped unmapped')
+# carried: 직전 실행·재표준화 전 판정에서 status를 물려받은 건수 (오탐 관리).
+IngestResult = namedtuple('IngestResult', 'created skipped unmapped carried')
 
 
 def normalize_severity(rule, semgrep_severity):
@@ -174,12 +175,82 @@ def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
     )
 
 
+def previous_succeeded_run(run):
+    """같은 프로젝트의 직전 완료(SUCCEEDED) 실행. 없으면 None.
+
+    "직전"은 생성 시각 기준, 동시각이면 pk 기준이다. diff 화면의 비교 기준 자동 선택
+    (RunDiffView)과 판정 승계(ingest_findings)가 이 함수를 같이 쓴다 — 두 곳이 다른
+    실행을 고르면 "비교에서는 유지인데 판정은 승계되지 않는" 어긋남이 생긴다.
+    """
+    return (
+        AnalysisRun.objects
+        .filter(project_id=run.project_id, status=AnalysisStatus.SUCCEEDED)
+        .exclude(pk=run.pk)
+        .filter(
+            Q(created_at__lt=run.created_at)
+            | Q(created_at=run.created_at, pk__lt=run.pk)
+        )
+        .order_by('-created_at', '-pk')
+        .first()
+    )
+
+
+# 판정 승계에 옮기는 필드. status_changed_by/at도 원본 그대로 — "누가 언제 처음
+# 판정했는지"가 회차를 넘어 남아야 한다.
+_STATUS_FIELDS = ('status', 'status_note', 'status_changed_by_id', 'status_changed_at')
+
+
+def _status_by_fingerprint(run, *, only_marked):
+    """run의 판정을 {fingerprint: (status, note, by_id, at)}로 모은다.
+
+    빈 fingerprint는 넣지 않는다 — 백필 이전 데이터·예외 상황의 흔적이라 빈 값끼리
+    짝지어지면 엉뚱한 finding에 판정이 붙는다 (diff의 _diff_rows와 같은 이유).
+    only_marked=True면 OPEN(미판정)은 제외한다.
+    """
+    if run is None:
+        return {}
+    queryset = Finding.objects.filter(run=run).exclude(fingerprint='')
+    if only_marked:
+        queryset = queryset.exclude(status=FindingStatus.OPEN)
+    return {
+        row[0]: tuple(row[1:])
+        for row in queryset.values_list('fingerprint', *_STATUS_FIELDS)
+    }
+
+
+def _carry_over_status(run, findings):
+    """새로 만든 findings에 판정을 입힌다 (오탐 관리 승계 규칙, docs/decisions.md 2026-09-05).
+
+    우선순위: ① 이 run에 이미 있던 판정(OPEN 포함) > ② 직전 완료 실행의 판정(OPEN 제외).
+
+    ①이 OPEN까지 포함하는 이유: 관리자가 승계된 오탐을 이 run에서 "다시 OPEN"으로
+    되돌린 뒤 재표준화하면, OPEN을 무시할 경우 직전 실행의 오탐 판정이 다시 승계돼
+    되돌림이 조용히 취소된다. 이 run에 있던 핑거프린트는 그 상태를 그대로 쓰고, 이
+    run에 없던(새) 핑거프린트만 직전 실행에서 받는다. 매칭은 fingerprint(순번 :N 포함)
+    정확 일치 — diff처럼 그룹 안 위치 짝짓기는 하지 않는다.
+
+    호출자는 이 run의 findings를 지우기 전에 불러야 한다(①을 삭제 전에 수집).
+    """
+    own = _status_by_fingerprint(run, only_marked=False)
+    inherited = _status_by_fingerprint(previous_succeeded_run(run), only_marked=True)
+    carried = 0
+    for finding in findings:
+        source = own.get(finding.fingerprint) or inherited.get(finding.fingerprint)
+        if source is None:
+            continue
+        for field, value in zip(_STATUS_FIELDS, source):
+            setattr(finding, field, value)
+        carried += 1
+    return carried
+
+
 def ingest_findings(run):
     """run.raw_result를 표준화해 Finding으로 저장한다 (SFR-014, DAR-006).
 
-    멱등하다 — 같은 run에 대해 여러 번 호출해도 결과가 누적되지 않는다. 기존 결과를
-    지우고 다시 넣는 과정을 한 트랜잭션으로 묶어, 실패 시 이전 결과가 남아 있게 한다
-    (중간에 끊겨 '결과 0건'으로 보이는 상태를 만들지 않는다).
+    멱등하다 — 같은 run에 대해 여러 번 호출해도 결과가 누적되지 않고, 이미 붙어 있던
+    판정(오탐/수용)도 보존된다. 기존 결과를 지우고 다시 넣는 과정을 한 트랜잭션으로
+    묶어, 실패 시 이전 결과(판정 포함)가 남아 있게 한다 (중간에 끊겨 '결과 0건'으로
+    보이는 상태를 만들지 않는다).
     """
     results = (run.raw_result or {}).get('results') or []
     source_root = source_dir(run).resolve()
@@ -205,12 +276,18 @@ def ingest_findings(run):
         # 두 건에서 뒤 트랜잭션의 DELETE가 자기 스냅샷 이후 커밋된 행을 지우지 못해
         # 양쪽 INSERT가 모두 남는다 — 취약점 건수가 두 배로 보고된다.
         # analysis의 실행 상태 원자적 전환(SEC-009)과 같은 유형의 경합이다.
+        # 판정 변경(FindingStatusView)도 같은 행을 잠근다 — 아래 DELETE와 INSERT 사이에
+        # 끼어든 판정이 지워진 행에 쓰여 사라지는 경합을 막는다.
         AnalysisRun.objects.select_for_update().get(pk=run.pk)
+        # 판정 승계는 반드시 DELETE 전에 — 자기 run의 판정(①)은 지우면 되찾을 수 없다.
+        carried = _carry_over_status(run, findings)
         Finding.objects.filter(run=run).delete()
         Finding.objects.bulk_create(findings)
 
     unmapped = sum(1 for finding in findings if finding.rule_id is None)
-    return IngestResult(created=len(findings), skipped=skipped, unmapped=unmapped)
+    return IngestResult(
+        created=len(findings), skipped=skipped, unmapped=unmapped, carried=carried,
+    )
 
 
 # --- 실행 간 비교 (diff — RFP 외 자체 개선, docs/decisions.md 2026-09-02) ---
@@ -222,28 +299,36 @@ DIFF_ITEM_FIELDS = (
     'rule_code', 'rule_name', 'severity', 'category', 'file_path', 'start_line',
     'message',
 )
+# 판정은 diff의 status(new/resolved/persisted)와 이름이 겹치므로 finding_status로 내보낸다.
+_DIFF_STATUS_FIELD = 'finding_status'
 # 신규가 가장 급하고, 유지는 이미 알던 것 — 화면 정렬 기준을 응답에서 고정한다.
 _DIFF_STATUS_RANK = {'new': 0, 'resolved': 1, 'persisted': 2}
 _DIFF_SEVERITY_RANK = {Severity.HIGH: 0, Severity.MEDIUM: 1, Severity.LOW: 2}
 
 
 def _diff_rows(run):
-    """diff 계산에 필요한 필드만 뽑는다. fingerprint가 빈 행은 매칭 대상에서 뺀다.
+    """diff 계산에 필요한 필드만 뽑는다. 반환: (rows, 빈 fingerprint 건수, 오탐 건수).
 
-    빈 값은 백필 이전 데이터나 예외 상황의 흔적이다 — 매칭에 넣으면 빈 값끼리
-    서로 짝지어지는 사고가 난다. 제외 건수는 응답의 excluded로 드러낸다.
+    두 종류를 매칭 대상에서 뺀다. (1) fingerprint가 빈 행 — 백필 이전 데이터나 예외
+    상황의 흔적이라, 매칭에 넣으면 빈 값끼리 서로 짝지어지는 사고가 난다. (2) 오탐
+    (FALSE_POSITIVE) 판정 — 사람이 아니라고 확인한 건이 신규/해결/유지 어디에도
+    섞이지 않게 한다. 수용(ACCEPTED)은 남긴다 — 알지만 고치지 않은 것이지 여전히
+    존재하는 취약점이다. 두 제외 건수는 응답에서 서로 다른 키(excluded /
+    false_positive)로 드러낸다.
     """
-    included, excluded = [], 0
+    included, excluded, false_positive = [], 0, 0
     rows = Finding.objects.filter(run=run).values(
         'rule_code', 'rule_name', 'severity', 'file_path', 'start_line',
-        'message', 'fingerprint', category=F('rule__category'),
+        'message', 'fingerprint', 'status', category=F('rule__category'),
     ).order_by('start_line', 'id')
     for row in rows:
-        if row['fingerprint']:
-            included.append(row)
-        else:
+        if not row['fingerprint']:
             excluded += 1
-    return included, excluded
+        elif row['status'] == FindingStatus.FALSE_POSITIVE:
+            false_positive += 1
+        else:
+            included.append(row)
+    return included, excluded, false_positive
 
 
 def _grouped(rows):
@@ -257,6 +342,7 @@ def _grouped(rows):
 def _item(status_value, row):
     item = {field: row[field] for field in DIFF_ITEM_FIELDS}
     item['status'] = status_value
+    item[_DIFF_STATUS_FIELD] = row['status']
     return item
 
 
@@ -274,8 +360,8 @@ def diff_findings(base_run, target_run):
     현재(target) 소스다. 해결 항목만 base 쪽 데이터다 (target에는 이미 없다).
     base_run이 None이면(비교할 이전 실행 없음) 전부 신규다.
     """
-    base_rows, base_excluded = _diff_rows(base_run) if base_run else ([], 0)
-    target_rows, target_excluded = _diff_rows(target_run)
+    base_rows, base_excluded, base_fp = _diff_rows(base_run) if base_run else ([], 0, 0)
+    target_rows, target_excluded, target_fp = _diff_rows(target_run)
 
     base_groups = _grouped(base_rows)
     target_groups = _grouped(target_rows)
@@ -300,6 +386,8 @@ def diff_findings(base_run, target_run):
         'summary': {status_value: counts.get(status_value, 0)
                     for status_value in ('new', 'resolved', 'persisted')},
         'excluded': {'base': base_excluded, 'target': target_excluded},
+        # 오탐 판정으로 뺀 건수 — 화면이 "비교 키 없음"과 구분해 안내한다.
+        'false_positive': {'base': base_fp, 'target': target_fp},
         'items': items,
     }
 
@@ -326,6 +414,9 @@ def run_change_counts(project_id):
     rows = (
         Finding.objects.filter(run_id__in=run_ids)
         .exclude(fingerprint='')
+        # diff_findings와 같은 규칙 — 오탐은 변화량에서도 뺀다. 여기만 포함하면 목록의
+        # 신규 건수와 비교 화면의 신규 건수가 어긋난다.
+        .exclude(status=FindingStatus.FALSE_POSITIVE)
         .values_list('run_id', 'fingerprint')
     )
     for run_id, fingerprint in rows:

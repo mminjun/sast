@@ -6,6 +6,7 @@ from .views import (
     CatalogSummaryView,
     DiagnosticRuleDetailView,
     DiagnosticRuleListView,
+    FindingStatusView,
     ProjectRunChangesView,
     RunDiffView,
     RunFindingListView,
@@ -29,6 +30,10 @@ urlpatterns = [
          RunFindingSummaryView.as_view(), name='run-finding-summary'),
     path('analysis-runs/<int:run_id>/findings/reingest/',
          RunFindingReingestView.as_view(), name='run-finding-reingest'),
+    # 판정 변경(오탐 관리) — 결과 1건에 대한 관리 행위라 run 아래가 아니라 finding id로
+    # 직접 지정한다. 스코프 검증은 finding이 속한 run으로 한다 (SEC-005).
+    path('findings/<int:finding_id>/status/',
+         FindingStatusView.as_view(), name='finding-status'),
     # 실행 간 비교 — findings와 같은 이유로 자원은 catalog 책임이다.
     path('analysis-runs/<int:run_id>/diff/',
          RunDiffView.as_view(), name='run-diff'),
