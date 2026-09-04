@@ -629,3 +629,60 @@ Semgrep 문서만 읽어서는 예측할 수 없고, 실제로 돌려 JSON을 �
   파서·모델·API에 언어 분기 없이 룰 YAML 추가만으로 확장되므로 구조 요건을 충족 —
   "구조로 충족" 별도 표기를 완료로 정리하고, 실제 추가 언어 구현은 SFR-011
   (미구현)로 분리 유지한다. 결과: 50개 중 완료 49 / 미구현 1 | DAR-008, SFR-010
+
+## 2026-09-04
+
+- **Windows 긴 경로 — 확장 경로(`\\?\`) 접두사로 처리, OS 설정 변경은 기각** | 깊은
+  Java 패키지 경로가 든 zip이 격리 루트와 합쳐 261자가 되어 MAX_PATH(260자)에 걸려
+  추출이 FileNotFoundError로 500이 났다. 더 나쁜 건, 일반 경로로 Semgrep에 넘기면
+  260자 넘는 파일이 오류 없이 조용히 스캔에서 빠진다는 점(실험으로 확인). 추출·Semgrep
+  대상·조각 읽기 전부에 `\\?\` 접두사(`analysis.services.fs_path`)를 쓰고, Semgrep 결과
+  경로의 접두사는 떼고(`strip_extended_prefix`) 상대경로로 바꾼다. 기각한 대안: 레지스트리
+  LongPathsEnabled — 관리자 권한이 필요하고, 배포 환경마다 설정해야 하며, 매니페스트
+  없는 semgrep-core.exe에는 효과가 불확실하다. 같은 날 macOS Finder 메타데이터
+  (`__MACOSX/`, `._*`, `.DS_Store`)는 추출에서 제외하고, Semgrep 출력·조각의 NUL은 저장 전
+  제거한다(PostgreSQL jsonb/text가 U+0000을 거부해 실행이 RUNNING에 고착됐던 사례).
+  검증 밖 추출 실패는 PENDING 행·반쯤 풀린 디렉토리를 남기지 않는다 | SEC-008, SFR-008
+- **CI 게이트 — "신규"는 CI 안에서 자체 계산, 서버 diff API는 쓰지 않는다 (RFP 외
+  자체 개선)** | PR마다 우리 룰셋으로 스캔해 신규 HIGH가 있으면 병합을 막는 GitHub
+  Actions(.github/workflows/sast-scan.yml). base 대비 비교가 필요한데, 서버 diff API를
+  쓰려면 (1) 러너에서 서버에 닿아야 하고(로컬 개발 서버뿐, 배포 없음) (2) 저장소 소스를
+  외부 서버로 업로드하고 인증 시크릿을 CI에 둬야 한다. 게이트는 저장소만 클론하면
+  도는 자족적 구성이어야 하므로 CI가 base와 head를 각각 스캔해 직접 비교한다. 기각한
+  다른 대안: Semgrep `--baseline-commit` — 자체 fingerprint가 로그인 없이는
+  `requires login`으로 가려지고, 매칭 규칙이 제품의 diff와 달라 "신규"의 정의가 웹
+  비교 화면과 CI에서 둘로 갈린다 | RFP 외 자체 개선
+- **CI 게이트 — 핑거프린트·조각 읽기는 재구현하지 않고 서버 모듈을 import; 조각 읽기를
+  `catalog/snippet.py`로 분리** | 키는 `catalog/fingerprint.py`의 `base_fingerprint`·
+  `assign_fingerprints`를 그대로 쓴다(rule_code | file_path | 공백 정규화한
+  code_snippet, 순번 :N, 줄 번호 미포함). code_snippet은 Semgrep이 `lines`를 가리므로
+  체크아웃된 소스에서 직접 읽는데, 읽기·절단·조합 규칙(최대 20줄, 줄당 500자·전체
+  2000자, NUL 제거, 2MB 초과 파일은 빈 조각)이 서버와 한 글자라도 다르면 해시가
+  어긋난다. 그래서 `_extract_lines`의 읽기 부분을 Django 비의존 순수 모듈
+  `catalog/snippet.py`(`read_snippet`)로 옮기고 서버와 CI가 같은 함수를 쓴다(서버 동작
+  불변 — 기존 스니펫·핑거프린트 테스트로 확인). 분류(신규/해결/유지)도 `diff_findings`와
+  같은 규칙(기본 해시 그룹 안 start_line 순 위치 짝짓기)이지만, 그 함수는 ORM에 묶여
+  있어 스크립트가 같은 규칙을 갖는다 — 규칙이 두 곳이 된 유일한 지점이고 테스트로
+  고정했다. 심각도도 서버와 같이 카탈로그(`catalog/data/kisa_rules.json`) 등급이
+  최종, 미매핑만 Semgrep 폴백(ERROR/WARNING/INFO→HIGH/MEDIUM/LOW, 그 외 MEDIUM) |
+  RFP 외 자체 개선, QLT-004
+- **CI 스캔 제외 — `catalog/samples`, `dogfood`, `tests.py`: 의도적으로 취약한
+  샘플/픽스처라 진단 대상이 아님** | 저장소 자체 스캔은 122건인데 catalog/samples(룰
+  검증용 취약 샘플) 31건, dogfood/demo-app(시연용 취약 앱) 35건, 각 앱 tests.py(취약
+  패턴 문자열 픽스처) 55건이다. 이걸 포함하면 모든 PR이 항상 실패해 게이트가
+  무의미해진다. 제외하면 운영 코드에서 1건(`config/access_log.py:19` KISA-EH-03 LOW —
+  접근 로그가 조회를 막지 않도록 예외를 흡수하는 9/1 결정의 의도된 코드)만 남고,
+  base에도 있어 매 PR '유지'로 표시된다 — "유지는 차단하지 않는다"의 실례로 그대로 둔다.
+  제외는 `.semgrepignore` 파일이 아니라 워크플로의 `--exclude` 인자로 한다 — Semgrep은
+  cwd의 `.semgrepignore`를 읽으므로 서버(cwd=저장소 루트)가 고객 소스를 스캔할 때까지
+  제외 규칙이 새어 들어간다 | RFP 외 자체 개선
+- **CI 게이트 — 차단은 신규 HIGH만, base는 PR base sha, 룰셋은 head 것을 양쪽에
+  적용** | 신규 MEDIUM/LOW·해결·유지는 코멘트로 보고만 한다(처음부터 전부 막으면
+  게이트를 끄게 된다). head는 `pull_request` 기본 체크아웃(merge ref = base + PR 변경)이라
+  "병합하면 이렇게 된다"를 스캔하는 셈이고, base는 `base.sha`를 `base/` 하위에 따로
+  체크아웃해 브랜치 전환 없이 두 번 스캔한다(cwd를 각 루트로 두어 결과 경로가 같은
+  상대경로 형식). 룰을 바꾸는 PR에서 base 룰과 head 룰이 섞이면 비교가 무의미하므로
+  룰셋은 head의 `catalog/rules`를 양쪽에 쓴다. 코멘트는 마커(`<!-- sast-gate -->`)로
+  이전 것을 찾아 갱신해 PR에 쌓이지 않게 하고, 포크 PR(읽기 전용 토큰)은 코멘트가
+  실패해도 job summary에 같은 내용이 남는다. Semgrep 버전은 requirements.txt와 같은
+  1.175.0으로 고정 | RFP 외 자체 개선

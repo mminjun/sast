@@ -123,6 +123,29 @@ python manage.py runserver        # 7. 백엔드 (127.0.0.1:8000)
 cd frontend && npm install && npm run dev   # 8. 프론트 (localhost:5173)
 ```
 
+## CI 게이트 (GitHub Actions)
+
+PR이 올라오면 `.github/workflows/sast-scan.yml`이 PR 브랜치와 base를 각각 우리 룰셋
+(`catalog/rules`)으로 스캔해 비교하고, **신규 HIGH가 1건이라도 있으면 병합을 막습니다.**
+
+- "신규"의 정의는 웹 비교 화면과 같습니다 — 서버와 같은 핑거프린트(`catalog/fingerprint.py`,
+  룰 | 경로 | 코드 조각)로 짝짓기 때문에 줄 번호가 밀린 것은 신규로 잡지 않습니다.
+- 결과는 job summary와 PR 코멘트에 심각도별 건수와 신규 항목 목록으로 남습니다
+  (코멘트는 갱신되어 쌓이지 않음). 신규 MEDIUM/LOW·해결·유지는 보고만 합니다.
+- 스캔 제외: `catalog/samples`, `dogfood`, `tests.py` — 의도적으로 취약한 샘플/픽스처라
+  진단 대상이 아닙니다. 판단 로직은 `scripts/sast_gate.py`, 근거는 `docs/decisions.md` 9/4.
+
+![신규 HIGH로 차단된 PR](docs/images/ci-gate-blocked.png)
+
+로컬에서 같은 판정을 재현하려면 (Semgrep JSON 두 개를 넘기면 됩니다):
+
+```bash
+semgrep scan --config=catalog/rules --json --metrics=off \
+  --exclude=catalog/samples --exclude=dogfood --exclude=tests.py \
+  --exclude=venv --exclude=frontend --output=head.json .
+python scripts/sast_gate.py --head head.json --base base.json --base-root <base 체크아웃>
+```
+
 ## 더 읽을 것
 
 - `CLAUDE.md` — 프로젝트 규칙(보안 규칙 포함)

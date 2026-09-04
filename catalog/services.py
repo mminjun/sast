@@ -19,26 +19,9 @@ from analysis.services import fs_path, source_dir, strip_extended_prefix, strip_
 
 from .fingerprint import assign_fingerprints
 from .models import DiagnosticRule, Finding, Severity
-
-# 코드 조각 저장 상한. Semgrep이 조각을 주지 않아 우리가 직접 파일에서 읽으므로
-# (아래 _read_snippet 참고), 한 건이 통째로 파일을 삼키지 않도록 제한을 둔다.
-MAX_SNIPPET_LINES = 20
-MAX_SNIPPET_CHARS = 2000
-# 한 줄에서 남길 최대 길이. 줄 수만 제한하면 '한 줄짜리 거대 파일'을 막지 못한다.
-MAX_SNIPPET_LINE_CHARS = 500
-# 이 크기를 넘는 파일은 조각 추출을 건너뛴다. 줄 단위로 읽어도 한 줄의 길이는
-# 제한되지 않으므로, 난독화·압축된 1줄 파일이면 그 한 줄이 통째로 메모리에 올라온다
-# (압축 해제 상한이 100MB라 그만큼까지 가능). 그 정도 파일의 조각은 읽어도 쓸모없다.
-MAX_SNIPPET_SOURCE_BYTES = 2 * 1024 * 1024
-# 취약 줄 앞뒤로 함께 보여줄 문맥 줄 수. 한 줄만 보면 `cursor.execute(query)`처럼 값이
-# 어디서 왔는지 알 수 없어 판정이 안 된다. 문맥은 표시용으로만 extra에 두고 code_snippet
-# 과 핑거프린트에는 넣지 않는다 — 근처 줄이 바뀌었다고 같은 취약점이 '해결+신규'로
-# 갈라지면 안 된다 (DAR-009 비교 안정성).
-SNIPPET_CONTEXT_LINES = 3
-# 문맥 전체(취약 줄 포함)의 상한. 조각 상한과 같은 이유로 둔다. 넘으면 문맥을 버리고
-# 조각만 남긴다 — 화면은 문맥이 없으면 조각으로 되돌아간다.
-MAX_CONTEXT_LINES = MAX_SNIPPET_LINES + 2 * SNIPPET_CONTEXT_LINES
-MAX_CONTEXT_CHARS = 2 * MAX_SNIPPET_CHARS
+# 코드 조각 읽기 규칙(줄 수·길이 상한, 문맥)은 catalog/snippet.py 한 곳에 있다 —
+# CI 게이트(scripts/sast_gate.py)도 같은 함수로 조각을 만들어야 핑거프린트가 맞는다.
+from .snippet import read_snippet
 
 # 매핑에 실패했을 때만 쓰는 폴백 표 (QLT-004).
 SEMGREP_SEVERITY_FALLBACK = {
@@ -142,47 +125,9 @@ def _extract_lines(source_root, relative_path, start_line, end_line):
     except ValueError:
         return '', None
 
-    last_line = min(end_line or start_line, start_line + MAX_SNIPPET_LINES - 1)
-    context_start = max(1, start_line - SNIPPET_CONTEXT_LINES)
-    context_end = last_line + SNIPPET_CONTEXT_LINES
-
+    # 읽기·절단·조합 규칙은 catalog/snippet.py 한 곳에 있다 (CI 게이트와 공유).
     # 260자 넘는 경로도 읽을 수 있도록 확장 경로로 연다 (analysis.services.fs_path).
-    target = Path(fs_path(target))
-    picked = {}
-    try:
-        if not target.is_file():
-            return '', None
-        # 줄 단위로 읽기 전에 파일 크기부터 본다 — 줄 수를 제한해도 한 줄의 길이는
-        # 제한되지 않으므로, 큰 파일에서는 한 줄을 읽는 것만으로 메모리가 튄다.
-        if target.stat().st_size > MAX_SNIPPET_SOURCE_BYTES:
-            return '', None
-
-        # 분석 대상 소스의 인코딩은 우리가 정할 수 없으므로 깨진 바이트는 대체 문자로
-        # 두고 계속한다 — 조각 하나 때문에 수집 전체가 실패하면 안 된다.
-        with target.open('r', encoding='utf-8', errors='replace') as handle:
-            for number, line in enumerate(handle, start=1):
-                if number > context_end:
-                    break
-                if number >= context_start:
-                    # NUL은 PostgreSQL text에 저장되지 않는다 — 바이너리 섞인 소스 방어.
-                    picked[number] = strip_nul(line.rstrip('\n'))[:MAX_SNIPPET_LINE_CHARS]
-    except OSError:
-        return '', None
-
-    snippet = '\n'.join(
-        picked[n] for n in range(start_line, last_line + 1) if n in picked
-    )[:MAX_SNIPPET_CHARS]
-    if not snippet:
-        return '', None
-
-    context_lines = [picked[n] for n in sorted(picked)]
-    # 문맥은 부가 정보다 — 상한을 넘으면 문맥만 버리고 조각은 남긴다.
-    if (
-        len(context_lines) > MAX_CONTEXT_LINES
-        or sum(len(line) for line in context_lines) > MAX_CONTEXT_CHARS
-    ):
-        return snippet, None
-    return snippet, {'start_line': context_start, 'lines': context_lines}
+    return read_snippet(fs_path(target), start_line, end_line)
 
 def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
     """Semgrep 결과 1건을 Finding으로 바꾼다. 저장하지 않을 결과면 None."""

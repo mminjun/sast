@@ -86,6 +86,7 @@
 | 프로젝트 대시보드 (9/2) | 메트릭 카드 4종, 심각도 스택 추이(CSS), 비교 요약·룰 상위 위젯 | frontend `ProjectDashboard` |
 | 코드 조각 문맥·강조 (9/4) | 취약 줄 앞뒤 3줄을 extra.context에 표시용으로 저장, 화면은 줄 번호+취약 줄만 색 강조. 핑거프린트는 code_snippet만 봐 비교 안정성 유지 | catalog/services.py `_extract_lines`, frontend `CodeSnippet` |
 | 분석 이력화 (9/2) | 프로젝트 내 회차(sequence) 표시, 행별 직전 대비 변화량 | analysis(sequence), catalog `GET /api/projects/{id}/run-changes/` |
+| CI 게이트 (9/4) | PR마다 base·head를 우리 룰셋으로 스캔해 서버와 같은 핑거프린트로 신규/해결/유지 분류, job summary·PR 코멘트 요약, 신규 HIGH면 실패. 조각 읽기를 `catalog/snippet.py`로 분리해 서버와 공유 | `.github/workflows/sast-scan.yml`, `scripts/sast_gate.py`, `catalog/snippet.py` |
 
 ## 현황 요약 (2026-09-02 기준)
 
@@ -95,7 +96,7 @@
 - TST 8개: 완료 8
 - QLT 5개: 완료 5
 - **합계: 50개 중 완료 49 / 미구현 1** (9/2 판정 조정으로 47→49, DAR-008·SFR-010 — decisions.md)
-- 테스트: **248개 전부 통과** (accounts 56 · projects 33 · analysis 38 · catalog 121)
+- 테스트: **269개 전부 통과** (accounts 56 · projects 33 · analysis 42 · catalog 125 · scripts 13 — 9/4 기준)
 - 프론트엔드: 7화면 완결 — 로그인 / 프로젝트 목록 / 프로젝트 상세(대시보드 포함) /
   실행 결과 상세 / 실행 비교 / 카탈로그 / 사용자 관리. 관리자·일반 계정 브라우저 E2E로
   권한 격리 실증(각 행의 8/28 표기), diff 시연은 demo-app v1~v3로 실서버 검증(9/2)
