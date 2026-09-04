@@ -570,9 +570,16 @@ td.truncate-sm {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 3fr 2fr;
+  /* minmax(0, …): fr 트랙의 기본 최소 너비는 내용 크기(auto)라, 비교 목록의 긴 한 줄이
+     왼쪽 컬럼을 내용만큼 넓혀 오른쪽 '룰별 탐지 상위'를 밀어낸다. 최소를 0으로 고정해
+     컬럼 비율을 유지하고 말줄임(.truncate)이 실제로 동작하게 한다. */
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   gap: 1.25rem;
   align-items: start;
+}
+
+.dashboard-grid > .card {
+  min-width: 0;
 }
 
 .trend-header {
