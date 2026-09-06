@@ -7,10 +7,12 @@
 Semgrep 무료 엔진이 못 하는 **함수 간·클래스 필드 경유 흐름 추적**은 1,120줄짜리 자체 taint 엔진이 맡음.
 Django + DRF / React / PostgreSQL.
 
+실행 방법은 [docs/setup.md](docs/setup.md)에 있음.
+
 ![실행 상세 — 오염 경로: 소스(request.GET) → 대입(load 메서드의 self.host) → 진입(run) → 싱크(os.system)](docs/images/run-detail-taint-trace.png)
 
-*실행 상세 화면. 한 메서드에서 `self.host`에 넣은 입력이 다른 메서드의 `os.system`까지 흐른 경로를 보여준다 —
-Semgrep OSS는 이 케이스를 잡지 못한다.*
+*실행 상세 화면. 한 메서드에서 `self.host`에 넣은 입력이 다른 메서드의 `os.system`까지 흐른 경로를 보여줌 —
+Semgrep OSS는 이 케이스를 잡지 못함.*
 
 ## 이 프로젝트가 하는 일
 
@@ -38,8 +40,10 @@ Semgrep OSS는 이 케이스를 잡지 못한다.*
 싱크)를 추적하고, 결과를 Semgrep과 (항목·파일·줄)로 병합함. "Semgrep만 잡은 건수"가 실행마다 기록되어 두
 엔진의 동등성이 깨지면 바로 드러남.
 
-**분석 큐와 CI 게이트** — 분석은 Django 6.1 내장 Tasks 큐(PostgreSQL 테이블)에 등록되고 워커가 처리함. PR마다
-GitHub Actions가 base와 head를 우리 룰셋으로 스캔해 서버와 같은 핑거프린트로 비교하고, **신규 HIGH가 1건이라도
+**분석 큐** — 분석은 Django 6.1 내장 Tasks 큐(PostgreSQL 테이블)에 등록되고 워커가 처리함. Redis 같은 별도
+서비스는 없음.
+
+**CI 게이트** — PR마다 GitHub Actions가 base와 head를 우리 룰셋으로 스캔해 서버와 같은 핑거프린트로 비교하고, **신규 HIGH가 1건이라도
 있으면 병합을 막음.** main은 이 체크를 필수로 요구함.
 
 <p>
@@ -55,7 +59,7 @@ Semgrep 1.175.0 OSS taint 모드를 직접 실측한 뒤(`docs/decisions.md` 202
 
 | 흐름 | Semgrep OSS taint | 자체 엔진 | 실측 |
 |---|---|---|---|
-| 함수 안 변수·f-string·체인 전파, 선언한 sanitizer | 잡음 | 잡음 (1단계) | 동등성: `vulnerable.py` 15건 일치, 자체 저장소 6/6 |
+| 함수 안 변수·f-string·체인 전파, 선언한 sanitizer | 잡음 | 잡음 (1단계) | 동등성: 샘플 15건 일치, 자체 저장소 6/6 |
 | 같은 파일 안 함수 간 (헬퍼로 넘긴 입력, 헬퍼가 반환한 입력) | **못 잡음** | 잡음 (2단계) | N = 4, M = 5 |
 | 본문이 씻는 헬퍼·메서드 (`my_escape(x)`, `self.quote(x)`) | 오탐 (이름 규약으로만 신뢰) | 본문을 보고 깨끗하게 판정 | M에 포함 |
 | 클래스 필드 경유 (`load()`에서 `self.q = 입력`, `run()`에서 싱크) | **못 잡음** | 잡음 (3단계, `__init__` 인자·필드 체인 포함) | N = 5, M = 1 |
@@ -91,8 +95,8 @@ Semgrep 1.175.0 OSS taint 모드를 직접 실측한 뒤(`docs/decisions.md` 202
    `django.tasks` + DB 백엔드를 택했다 — 새 패키지 1개, 새 서비스 0개, 테스트는 코어의 `ImmediateBackend`.
    Celery가 필요해지면 바꿀 곳 세 군데를 적어 두었다. — decisions 2026-09-06 (백그라운드 큐)
 
-설계 단계의 우려가 실측으로 뒤집힌 사례도 두 번 있음 — 2단계 "요약 모양은 단조"라는 첫 주장이 거짓이었던
-것, 3단계 흐름 비민감의 오탐 비용이 Django 906파일에서 호출 순서 오탐 0으로 나온 것. 둘 다 decisions에 과정째
+설계 단계의 우려가 실측으로 뒤집힌 사례도 두 번 있음 — 2단계에서 함수 요약이 패스마다 커지기만 한다고
+봤는데 실제로는 진동했던 것, 3단계 흐름 비민감의 오탐 비용이 Django 906파일에서 호출 순서 오탐 0으로 나온 것. 둘 다 decisions에 과정째
 남김.
 
 ## 숫자로 보는 저장소
@@ -110,6 +114,8 @@ Semgrep 1.175.0 OSS taint 모드를 직접 실측한 뒤(`docs/decisions.md` 202
 
 ## 작업 방식
 
+구현에는 Claude Code를 썼고, 설계 판단과 검증 기준은 아래 규칙과 기록으로 통제함.
+
 - **규칙을 문서로 고정.** `CLAUDE.md`에 보안 규칙(bcrypt, IDOR 재검증, Zip Slip, 실행별 격리,
   존재 은닉, 시크릿 금지)과 작업 규칙(설계부터 제시, 한 번에 한 기능, 새 의존성은 승인,
   요구사항 번호를 커밋에)을 적어 두고 매번 이 파일부터 확인함.
@@ -123,15 +129,13 @@ Semgrep 1.175.0 OSS taint 모드를 직접 실측한 뒤(`docs/decisions.md` 202
   분석 제외 경로, `.env` 사고 처리, 자체 엔진의 결함 둘(헤더 식 호출 누락, 요약 키 소실)이
   전부 여기서 나옴.
 
-구현에는 Claude Code를 썼고, 설계 판단과 검증 기준은 위 규칙과 기록으로 통제함.
-
 ## 실행 방법
 
 로컬 실행(터미널 3개), 테스트, CI 게이트 로컬 재현은 [docs/setup.md](docs/setup.md)에 있음.
 
 ## 더 읽을 것
 
-- `docs/decisions.md` — 설계 결정 199건 (앞의 목차로 절을 찾는다)
+- `docs/decisions.md` — 설계 결정 199건 (앞의 목차로 절을 찾음)
 - `docs/requirements-map.md` — RFP 요구사항 50개 + 자체 개선 항목의 구현 상태
 - `docs/worklog.md` — 일자별 작업 기록
 - `docs/plan.md` — 킥오프 계획(요구사항 해석·비목표·일정)
