@@ -19,10 +19,12 @@ KIND_INPUT = 'input'
 KIND_PARAM = 'param'
 
 
-def node(path, line, code, role=None):
+def node(path, line, code, role=None, method=None):
     result = {'path': path, 'line': line, 'code': code}
     if role:
         result['role'] = role
+    if method:
+        result['method'] = method  # 필드 대입 노드(role=field)에 대입한 메서드 이름
     return result
 
 
@@ -32,12 +34,17 @@ class Taint:
     steps: tuple = ()
     kind: str = KIND_INPUT
 
-    def step(self, new_node):
-        """경유 노드를 붙인 새 Taint. 소스와 같은 줄이거나 이미 있는 줄은 붙이지 않는다(표시 중복 방지)."""
-        if new_node['line'] == self.source['line'] and new_node['path'] == self.source['path']:
-            return self
-        if any(s['line'] == new_node['line'] and s['path'] == new_node['path'] for s in self.steps):
-            return self
+    def step(self, new_node, force=False):
+        """경유 노드를 붙인 새 Taint. 소스와 같은 줄이거나 이미 있는 줄은 붙이지 않는다(표시 중복 방지).
+
+        force=True면 같은 줄이어도 붙인다 — 필드 대입 노드(role=field)는 `self.q = request.GET.get("q")`처럼
+        소스와 같은 줄이어도 "어느 메서드가 대입했나"를 경로에 남겨야 한다(역할이 달라 읽는 데 혼동이 없다).
+        """
+        if not force:
+            if new_node['line'] == self.source['line'] and new_node['path'] == self.source['path']:
+                return self
+            if any(s['line'] == new_node['line'] and s['path'] == new_node['path'] for s in self.steps):
+                return self
         return replace(self, steps=self.steps + (new_node,))
 
 

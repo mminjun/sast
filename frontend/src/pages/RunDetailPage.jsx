@@ -18,12 +18,17 @@ const FINDING_STATUSES = Object.keys(FINDING_STATUS_LABELS); // OPEN, FALSE_POSI
 /** 오염 경로 — 소스 → 중간 변수 → 싱크. extra.taint_trace 형식은 catalog/services.py
  *  (자체 taint 구현도 같은 형식). 노드마다 path가 있어 파일이 달라져도 표시할 수 있다. */
 // 경유 노드의 role(자체 엔진이 붙임): 호출 줄 → 피호출 함수 def 줄로 넘어가는 "점프"가 함수 경계다.
-const STEP_ROLE_LABELS = { call: '호출', enter: '진입', return: '반환' };
+// field(대입)는 클래스 필드에 넣은 줄 — method에 대입한 메서드 이름이 있어 "대입 (load) → 진입 (run)"으로 읽힌다.
+const STEP_ROLE_LABELS = { call: '호출', enter: '진입', return: '반환', field: '대입' };
 
 function TaintTrace({ trace }) {
+  const label = (step) => {
+    const base = STEP_ROLE_LABELS[step.role] || '경유';
+    return step.method ? `${base} (${step.method})` : base;
+  };
   const nodes = [
     { label: '소스', ...trace.source },
-    ...trace.steps.map((step) => ({ label: STEP_ROLE_LABELS[step.role] || '경유', ...step })),
+    ...trace.steps.map((step) => ({ label: label(step), ...step })),
     { label: '싱크', ...trace.sink },
   ];
   const samePath = nodes.every((n) => n.path === trace.sink.path);

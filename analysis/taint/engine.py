@@ -44,6 +44,7 @@ def analyze_directory(source_root, *, time_budget=120.0, max_file_bytes=DEFAULT_
         'files': 0, 'analyzed': 0, 'findings': 0,
         'skipped_excluded': 0, 'skipped_size': 0, 'skipped_budget': 0, 'parse_errors': 0,
         'summary_passes': 0,  # 함수 요약 고정점 반복 횟수의 최대(파일 기준) — 상한에 닿았는지 보는 용도
+        'class_passes': 0,    # 클래스 필드·메서드 요약 고정점 반복 횟수의 최대(클래스 기준)
         'seconds': 0.0,
     }
 

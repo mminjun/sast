@@ -42,6 +42,7 @@ from analysis.services import (
     DATAFLOW_TRACE_FILE, execute_analysis, fs_path, run_semgrep, source_dir, workspace_dir,
 )
 from analysis.signals import run_succeeded
+from analysis.taint.python_analyzer import SUMMARY_PASSES
 from projects.models import Project, ProjectMember
 
 from .fingerprint import backfill_fingerprints, base_fingerprint
@@ -2623,4 +2624,93 @@ class InterproceduralTests(WorkspaceMixin, TestCase):
             f'{EXPECTED_INTER_SEMGREP_FALSE_POSITIVES}, 실제 {semgrep_hits}). 이 파일의 결과는 전부 Semgrep의 알려진 '
             f'오탐이므로, 줄었다면 Semgrep(버전 {self._semgrep_version()})이 좋아진 것이지 우리 엔진이 나빠진 것이 '
             f'아닙니다 — docs/decisions.md 2026-09-06 custom-taint 2단계의 M을 갱신하세요.',
+        )
+
+
+# ---------------------------------------------------------------------------
+# 자체 taint 엔진 3단계 — 클래스 필드, Semgrep을 넘는 지점을 숫자로 (docs/decisions.md 2026-09-06 custom-taint 3단계)
+# ---------------------------------------------------------------------------
+
+# taint_class_vulnerable.py에서 자체 엔진이 잡아야 하는 (KISA 코드, 싱크 줄). 총 7건.
+EXPECTED_CLASS_FINDINGS = {
+    ('KISA-IV-05', 19), ('KISA-IV-05', 27), ('KISA-IV-03', 35), ('KISA-IV-02', 46),
+    ('KISA-IV-12', 57), ('KISA-IV-01', 68), ('KISA-IV-05', 74),
+}
+# 그중 Semgrep taint(1.175.0)가 못 잡고 자체 엔진만 잡는 것 — 다른 메서드에서 대입된 필드를 읽는 싱크.
+EXPECTED_CLASS_CUSTOM_ONLY = {
+    ('KISA-IV-05', 19), ('KISA-IV-05', 27), ('KISA-IV-03', 35), ('KISA-IV-02', 46), ('KISA-IV-01', 68),
+}
+# taint_class_safe.py에서 Semgrep taint가 잡는 건수 — Semgrep의 알려진 오탐(같은 클래스 메서드의 본문을 못 본다).
+EXPECTED_CLASS_SEMGREP_FALSE_POSITIVES = 1
+
+
+@tag('semgrep')
+@unittest.skipUnless(SEMGREP_AVAILABLE, 'semgrep 바이너리가 없어 건너뜀')
+@override_settings(ANALYSIS_SEMGREP_CONFIG=str(settings.CATALOG_RULES_DIR))
+class ClassFieldTests(WorkspaceMixin, TestCase):
+    """3단계 종료 기준 — 클래스 필드 경유에서 Semgrep이 못 잡고 우리가 잡는 케이스(N)와 Semgrep의 오탐(M)."""
+
+    def setUp(self):
+        super().setUp()
+        seed()
+        self.setup_workspace()
+        self.admin = User.objects.create_user(
+            email='admin@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        self.project = Project.objects.create(name='p', created_by=self.admin)
+
+    def analyze(self, name):
+        run = self.make_run(self.project, self.admin, status_value=AnalysisStatus.RUNNING)
+        self.write_source(run, f'src/{name}', (SAMPLES_DIR / name).read_text(encoding='utf-8'))
+        execute_analysis(run)
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+        return run
+
+    @staticmethod
+    def _semgrep_version():
+        return subprocess.run(['semgrep', '--version'], capture_output=True, text=True).stdout.strip()
+
+    def test_vulnerable_sample_custom_engine_catches_field_flows_semgrep_misses(self):
+        run = self.analyze('taint_class_vulnerable.py')
+        stats = run.custom_result['stats']
+        self.assertEqual(run.custom_result['errors'], [])
+        found = {(f.rule_code, f.start_line) for f in Finding.objects.filter(run=run)}
+        self.assertEqual(found, EXPECTED_CLASS_FINDINGS)
+        custom_only = {
+            (f.rule_code, f.start_line) for f in Finding.objects.filter(run=run, extra__engine='custom-taint')
+            if 'engines' not in f.extra
+        }
+        self.assertEqual(custom_only, EXPECTED_CLASS_CUSTOM_ONLY)
+        self.assertEqual(stats['custom_only'], len(EXPECTED_CLASS_CUSTOM_ONLY), stats)
+        self.assertEqual(stats['semgrep_only'], 0, stats)
+        self.assertLess(stats['class_passes'], SUMMARY_PASSES)
+
+    def test_vulnerable_sample_traces_show_assigning_and_reading_methods(self):
+        run = self.analyze('taint_class_vulnerable.py')
+        by_line = {f.start_line: f.extra['taint_trace'] for f in Finding.objects.filter(run=run)}
+        trace = by_line[19]  # load → run
+        self.assertEqual(trace['source']['line'], 16)
+        self.assertEqual(
+            [(s.get('role'), s['line'], s.get('method')) for s in trace['steps']],
+            [('field', 16, 'load'), ('enter', 18, None)],
+        )
+        trace = by_line[46]  # raw → expr 필드 체인
+        self.assertEqual([(s.get('role'), s.get('method')) for s in trace['steps']],
+                         [('field', 'load'), ('field', 'prepare'), ('enter', None)])
+        self.assertEqual(by_line[68]['paths_count'], 2)  # from_get·from_post 두 메서드가 대입
+
+    def test_safe_sample_custom_engine_is_clean_and_semgrep_false_positives_are_pinned(self):
+        run = self.analyze('taint_class_safe.py')
+        self.assertEqual(
+            run.custom_result['results'], [],
+            '자체 엔진이 taint_class_safe.py에서 결과를 냈습니다 — 필드 대입의 sanitizer·상수 판단이 깨졌는지 확인하세요.',
+        )
+        semgrep_hits = Finding.objects.filter(run=run, extra__engine='semgrep-taint').count()
+        self.assertEqual(
+            semgrep_hits, EXPECTED_CLASS_SEMGREP_FALSE_POSITIVES,
+            f'Semgrep taint가 taint_class_safe.py에서 잡는 건수가 바뀌었습니다(기대 '
+            f'{EXPECTED_CLASS_SEMGREP_FALSE_POSITIVES}, 실제 {semgrep_hits}). 이 파일의 결과는 전부 Semgrep의 알려진 '
+            f'오탐이므로, 줄었다면 Semgrep(버전 {self._semgrep_version()})이 좋아진 것이지 우리 엔진이 나빠진 것이 '
+            f'아닙니다 — docs/decisions.md 2026-09-06 custom-taint 3단계의 M을 갱신하세요.',
         )
