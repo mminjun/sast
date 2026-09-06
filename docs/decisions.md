@@ -1108,3 +1108,110 @@ Semgrep 문서만 읽어서는 예측할 수 없고, 실제로 돌려 JSON을 �
 - **상한(200MB 업로드 / 500MB 해제 / 600초)은 이번엔 유지한다** | 큐 분리는 상한을 올릴 수 있게 하는
   구조 변경이고, 실제 대형 업로드를 큐로 한 번 돌려 본 뒤(raw_result JSON 크기, DRF 업로드 메모리,
   표준화 시간) 올린다. 질문에 나온 50/100/120은 옛 값이었다 | SEC-008
+
+## 2026-09-06 (Semgrep taint 모드 룰 — 인젝션 계열 Python, 오염 경로 형식, 엔진 표시)
+
+- **인젝션 7항목(IV-01·02·03·04·05·07·12)의 Python 룰을 `mode: taint`로 바꾼다 — 한 지점 패턴은
+  "변수를 한 번 거치면 미탐, 상수를 넘겨도 오탐"이었다** | 패턴 룰은 싱크 인자에 입력이 직접 보이는
+  형태(`os.system(f"ping {host}")`)만 잡았다. `cmd = "ping " + host; os.system(cmd)`는 놓치고,
+  `os.system("ping " + LOCALHOST)`는 잡았다. taint(sources/sanitizers/sinks)는 "외부 입력이 싱크까지
+  흘러가는가"를 보므로 둘 다 바로잡힌다. 대상은 입력→싱크 구조가 있는 인젝션 계열뿐이다 — 설정·API
+  오용·에러처리(SF·EH·CE·EN·AA 대부분)와 CE-05(역직렬화)·IV-08(XXE)·IV-11(CSRF)은 흐름이 아니라 호출
+  자체가 판정 근거라 패턴 그대로다. IV-04(XSS)는 Python 룰이 없었는데 taint로 처음 넣었다(신규 `.py`
+  커버리지, 구현 항목 수 39 불변). IV-09(XML 삽입)는 taint로만 가능하지만 이번 범위 밖. Java·JS는 소스가
+  문법에 드러나(`request.getParameter`, `req.query.x`) 더 쉽지만 3언어를 한 PR에 넣으면 검토 단위가
+  너무 커서 다음 브랜치로 미뤘다(사용자 동의) | SFR-009, SFR-011, SFR-013
+- **소스는 "함수 매개변수(self·cls 제외) + 웹 요청 값 + input/argv/environ" — 매개변수를 소스로 보는
+  것이 감도를 유지하는 핵심이고, 오탐 위험도 거기 있다** | 지금까지 패턴 룰은 "매개변수가 싱크에 들어가면"
+  잡았다(헬퍼 함수는 호출자를 모르므로 매개변수를 신뢰할 수 없다). 요청 값만 소스로 두면 그 감도가
+  통째로 사라진다. 대신 오탐은 (1) 상수 추적(상수만 흐르면 안 잡음), (2) sanitizer 선언으로 통제한다.
+  sanitizer는 공통(`int()`/`float()`, allowlist `if x in ALLOWED:`/`if x not in ALLOWED: raise`, 정규식
+  `if not re.fullmatch(...): raise`, 이름 규약 `validate_*/sanitize_*/clean_*/escape_*` 반환값)과 항목별
+  (`shlex.quote`, `os.path.basename`·`Path(...).name`·`is_relative_to` 검사, `escape`·`format_html`·
+  `bleach.clean`, `url_has_allowed_host_and_scheme`, `sql.Identifier/Literal`). safe.py에 "매개변수를 받아
+  안에서 검증한 뒤 쓰는" 함수를 검증 형태별(정규식·allowlist·타입 변환·파일명·인용·검증 헬퍼·상수만)로
+  넣어 0건을 실측했다(사용자 요청). 이름 규약은 함수 본문을 못 보는 한계를 이름으로 메우는 임시 규칙
+  이라 오탐(이름만 validate_인 함수)·미탐(다른 이름의 검증 함수) 양쪽 위험이 있다 — 자체 taint 구현이
+  본문을 보게 되면 뺀다 | SFR-009, TST-005
+- **기존 패턴 룰은 교체(삭제)한다 — 병행하면 건수가 두 배가 되고, 교체해도 diff·판정 승계는 깨지지
+  않는다** | `catalog/fingerprint.py base_fingerprint`는 `rule_code or semgrep_check_id`를 쓴다 — 매핑된
+  결과는 룰 id가 아니라 **KISA 코드**로 키가 잡힌다. 같은 싱크 줄이면 패턴이 잡든 taint가 잡든 해시가
+  같아 이전 실행과 '유지'로 짝지어지고 오탐 판정도 승계된다. 반대로 병행하면 같은 코드·같은 줄에 두 룰이
+  걸려 base 해시가 같고 `:1`, `:2` 순번만 달라진다 — 핑거프린트는 중복을 걸러 주지 않고 건수를 두 배로
+  만든다(순번은 diff 안정용). 그래서 항목별로 교체했다. taint가 못 잡는데 패턴이 잡던 것은 "상수/미선언
+  소스"뿐이고 그것은 오탐 쪽이다. 룰 id는 `-taint` 접미사(`kisa-iv-01-sql-injection-taint`) — id가
+  달라도 핑거프린트 무관, 시드 재실행으로 `semgrep_rule_ids` 갱신 | SFR-014, DAR-009
+- **오염 경로는 JSON에 없다(실측) — 텍스트 출력을 어댑터로 읽고, 형식은 자체 구현이 그대로 쓸 수 있게
+  지금 정한다** | Semgrep 1.175.0 OSS에서 `--dataflow-traces`는 도움말대로 text·SARIF에만 영향을 준다.
+  JSON `extra`엔 `dataflow_trace` 키 자체가 없고(CLI `engine.py has_dataflow_traces`가 Pro 엔진에만
+  True), SARIF `codeFlows`도 null이다. 텍스트 출력만 "Taint comes from / intermediate variables / how
+  taint reaches the sink" 블록으로 경로를 준다. 한 스캔에서 `--json`(stdout) + `--text-output=<파일>`을
+  같이 쓸 수 있음을 확인해, 실행이 작업 영역에 `dataflow_trace.txt`를 받아 두고(analysis는 내용을
+  모른다, QLT-001) 표준화가 `catalog/taint_trace.py`로 읽어 `(경로, 룰 id, 싱크 줄)`로 짝짓는다.
+  저장 형식은 `Finding.extra['taint_trace'] = {source: {path, line, code}, steps: [...], sink: {...}}` —
+  새 컬럼 없이 DAR-009 부가정보 JSON에 두고, 노드마다 `path`를 둬 파일 간 추적이 같은 형식을 쓰게 한다.
+  Semgrep이 중간 변수 목록에 소스 줄을 한 번 더 넣는 습관은 정규화에서 뺀다. 핑거프린트는 `extra`를
+  보지 않으므로 경로 표시가 달라져도 diff 불변 | SFR-014, DAR-009
+- **텍스트 어댑터는 이 설계에서 가장 깨지기 쉬운 부분 — 조용히 실패하지 않게 만든다** | 버전이 바뀌면
+  형식이 달라질 수 있다(버전은 1.175.0으로 고정). 어댑터는 어떤 입력에도 예외를 내지 않고 빈 결과를
+  주며, ingest는 (1) 파싱 실패·파일 없음이어도 탐지 결과를 전부 저장하고, (2) "taint 결과가 1건 이상인데
+  경로가 한 건도 안 붙음"을 `catalog.services` 경고 로그(run id·taint 건수·파일 유무)로 남기며, (3) 일부만
+  붙으면 info로 건수를 남긴다. `IngestResult.traced`와 재표준화 응답 `traced`로도 드러난다. 형식이 다른
+  텍스트(빈 파일·다른 형식)를 주는 시험과, 실제 Semgrep 출력에서 변수 경유 케이스의 줄 번호까지 맞는지
+  보는 시험(`@tag('semgrep')`)으로 고정했다(사용자 요청) | QLT-002, TST-005
+- **엔진 표시 `extra['engine']`: `semgrep-pattern` | `semgrep-taint` | (예약) `custom-taint`** | 룰 YAML
+  `metadata.engine`이 정하고(없으면 pattern), `seed_catalog`가 허용 목록 밖 값을 거부해 오타가 결과에
+  실리지 않는다. 자체 구현은 `custom-taint`로 자기 결과를 표시하고 같은 `taint_trace` 형식을 채운다.
+  CI 게이트(`scripts/sast_gate.py`)는 핑거프린트만 쓰므로 무영향. 화면은 항목 코드 옆 `taint` 태그와
+  코드 보기 안 "소스 → 경유 → 싱크" 목록 | DAR-009, SFR-016
+- **Semgrep taint 한계 실측 (1.175.0 OSS) — 자체 구현이 넘어야 할 것** |
+
+  | 실험 | 결과 |
+  |---|---|
+  | 변수 경유(`cmd = … + host; line = cmd + …; sink(line)`) | 잡음 |
+  | f-string·`%`·`.format`·`" ".join([…, x])`·`str(x)`·`.strip().lower()` 체인·dict 리터럴→인덱스 | 전부 전파 |
+  | 상수만(`target = "localhost"`, f-string 숫자 상수) | 안 잡음(정확) |
+  | `subprocess.run(["ping", host])`(shell 없음) | 안 잡음(싱크 조건 불충족, 정확) |
+  | 선언한 sanitizer(`shlex.quote`, `int`) | 인식 |
+  | `if x in ALLOWED:` 검증 | `by-side-effect: true`로 선언해야 인식(없으면 잡음) |
+  | `if not re.fullmatch(...): return` 검증 | 선언 없으면 인식 못 함 — 검증 형태를 하나씩 적어야 한다 |
+  | 사용자 정의 이스케이프 `my_escape(x)` | 그대로 전파(본문을 안 봄) — 이름 규약으로만 신뢰 |
+  | **함수 간**: `view()`가 `helper(q)`, 싱크는 helper 안(요청 값만 소스) | **못 잡음** — intra-procedural. 매개변수 소스라야 helper 자체에서 잡힘 |
+  | **파일 간** | **못 잡음** |
+  | **클래스**: `load()`에서 `self.q = 입력`, `run()`에서 `sink(self.q)` | **못 잡음**; 같은 메서드 안 `self.cmd = 입력; sink(self.cmd)`는 잡음 |
+  | 소스 두 개 → 싱크 하나 | 결과 1건(싱크 기준) |
+  | 오염 경로 | JSON·SARIF 없음, 텍스트만 |
+  | `metavariable-regex`를 `pattern-either` 밖에 두기 | 바인딩 안 된 분기(urlopen)까지 걸러짐 — 9/5와 같은 함정, 분기 안으로 |
+
+  → 목표: 함수 간·파일 간·클래스 필드 추적, early-return 검증의 자동 인식, 사용자 정의 이스케이프
+  함수의 본문 판단, 기계가 읽는 경로 출력 | SFR-009
+- **IV-03 싱크에서 삭제·이름 변경(os.remove 등)을 뺀다** | 매개변수가 소스라 `cleanup(path): os.remove(path)`
+  같은 파일 헬퍼가 전부 걸려 신호가 묻힌다. 싱크는 열기·읽기·쓰기·전송(`open`, `Path.read_/write_/open`,
+  `send_file`)으로 한정한다. 알려진 미탐 범위 | SFR-009
+- **성능 — taint 7룰과 `--dataflow-traces --text-output`을 더해도 스캔 시간은 달라지지 않는다** | 패턴만
+  (taint 파일 제외) vs 최종 세트(taint + 경로 텍스트 출력)를 같은 조건으로 잰 결과. 약 10초는 Semgrep
+  기동·룰 로딩 비용이고 첫 실행(18초)은 콜드 스타트다.
+
+  | 대상 | 패턴만 | 최종(taint + traces) | 결과 건수 |
+  |---|---|---|---|
+  | demo-app v3 (Python 8파일) | 18.0초(콜드) | 11.8초 | 7 → 9 (변수 경유 2건 추가) |
+  | 도그푸딩 zip (170파일) | 9.4초 | 8.2초 | 8 → 10 |
+  | 이 저장소 (CI 제외 적용) | 12.9초 | 11.3초 | 1 → 7 (IV-03 6건 추가, 아래) |
+
+  600초 타임아웃 안에서 여유가 크다 | SEC-009
+- **자체 저장소 도그푸딩 — 매개변수 소스의 비용이 숫자로 드러났다: IV-03 6건(테스트 파일 포함 시 9건),
+  전부 "경로를 매개변수로 받아 여는 헬퍼"** | zip 추출의 `open(fs_path(target))`, `scripts/sast_gate.py`의
+  CLI 인자 파일 열기, 테스트 헬퍼. 호출자가 격리 루트 검사(`relative_to`)를 마친 경로를 넘기지만 함수 안에서는
+  그것을 알 수 없으니 매개변수 소스 규칙상 걸린다 — 이것이 "매개변수를 소스로 본다"의 정확한 비용이다.
+  처리: (1) `$P.open(...)` 싱크는 뺐다(타입을 모르는 Semgrep에선 `ZipFile.open(member)` 같은 무관한
+  `.open()`이 걸려 2건이 순수 오탐이었다). (2) 나머지는 룰을 더 좁히지 않고 **오탐 판정 워크플로**로 다룬다 —
+  IV-03만 요청 값 소스로 좁히면 `read_report(name): open("/var/reports/" + name)` 같은 정탐도 함께 사라진다.
+  도그푸딩 프로젝트(run 58)에서 "매개변수 소스의 구조적 오탐 — 호출자가 격리 검사 후 넘기는 경로" 사유로
+  판정했고, 같은 zip 재실행(run 59)에서 48건(SF-06 38 + IV-03 10)이 전부 승계됐다 — 오탐 관리가 실제 상황에
+  쓰인 두 번째 사례. (3) 새 파일 `catalog/taint_trace.py`의 `load_trace_file(file_path)`는 base에 없어 CI
+  게이트에 '신규 HIGH'로 잡혀 PR이 차단됐다(PR #11 첫 실행) — 판정 없이 게이트만 보는 CI에서는 오탐도 막는다.
+  파일 읽기를 ingest로 옮기고 `_extract_lines`와 같은 격리 루트 검사(`is_relative_to`, 룰이 인식하는 형태)를
+  둬 해결했다 — 다중 방어라는 이 저장소의 관례와도 맞는다. 기존 6건은 base에도 있어 '유지'로 집계된다.
+  같은 zip으로 패턴 룰 실행(run 53)과 taint 룰 실행(run 57)을 비교하니 new 0 / resolved 0 / persisted 14 —
+  IV-01·02·05·07 결과가 전부 '유지'로 짝지어졌다(핑거프린트가 KISA 코드 기준이라는 판단 2의 실증) |
+  SFR-009, TST-005

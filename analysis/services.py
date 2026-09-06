@@ -70,6 +70,10 @@ MACOS_METADATA_PREFIX = '._'
 # (2026-09-06 실측: 루트 지정 시 hidden/ 항목이 결과에서 사라짐). `.gitignore`는
 # --no-git-ignore로 이미 무시한다.
 SCAN_CONTROL_FILES = ('.semgrepignore',)
+# Semgrep의 taint 오염 경로(소스→중간 변수→싱크)는 JSON에 실리지 않고 텍스트 출력에만 있다
+# (1.175.0 OSS 실측). 실행 때 텍스트 출력을 작업 영역의 이 파일로 같이 받아 두면 표준화
+# (catalog/taint_trace.py)가 읽는다. 이 앱은 내용을 해석하지 않는다 (QLT-001).
+DATAFLOW_TRACE_FILE = 'dataflow_trace.txt'
 # PostgreSQL text/jsonb는 NUL(U+0000)을 저장하지 못한다. 외부 도구 출력과 고객 소스에서
 # 온 문자열은 저장 전에 걷어낸다 (방어선 — 위 메타데이터 제외가 근본 해결).
 NUL = chr(0)
@@ -400,6 +404,12 @@ def run_semgrep(run):
                 # 229건 그대로). 루트는 확장 경로를 받지 않으므로 일반 절대 경로로 넘긴다
                 # (대상은 확장 경로 그대로 — 둘의 조합은 실측으로 확인).
                 f'--project-root={os.path.abspath(source_dir(run))}',
+                # taint 룰의 오염 경로. JSON(stdout)은 그대로이고 텍스트 출력만 파일로 더 받는다 —
+                # `--dataflow-traces`는 text·SARIF에만 영향을 준다(도움말·실측). 줄 수 제한(기본 10)을
+                # 풀어야 긴 경로가 잘리지 않는다.
+                '--dataflow-traces',
+                '--max-lines-per-finding', '0',
+                f'--text-output={os.path.abspath(workspace_dir(run) / DATAFLOW_TRACE_FILE)}',
                 str(target),
             ],
             capture_output=True,

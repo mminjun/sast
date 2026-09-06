@@ -39,7 +39,8 @@ from projects.models import Project, ProjectMember
 
 from .models import AnalysisRun, AnalysisStatus
 from .services import (
-    STALE_RUN_MESSAGE, fs_path, mark_queued, reap_stale_runs, source_dir, workspace_dir,
+    DATAFLOW_TRACE_FILE, STALE_RUN_MESSAGE, fs_path, mark_queued, reap_stale_runs, source_dir,
+    workspace_dir,
 )
 from .tasks import run_analysis
 
@@ -662,6 +663,12 @@ class ExcludePathsExecuteTests(AnalysisTestCase):
         # 없으면 Semgrep이 위로 .git을 찾아 우리 저장소를 루트로 삼는다 (run 51 사고).
         run = AnalysisRun.objects.get(pk=run_id)
         self.assertIn(f'--project-root={os.path.abspath(source_dir(run))}', args)
+        # taint 오염 경로는 텍스트 출력에만 있다 — 작업 영역에 같이 받아 둔다 (catalog/taint_trace.py).
+        self.assertIn('--dataflow-traces', args)
+        self.assertIn(
+            f'--text-output={os.path.abspath(workspace_dir(run) / DATAFLOW_TRACE_FILE)}', args,
+        )
+        self.assertEqual(args[args.index('--max-lines-per-finding') + 1], '0')
 
     @patch('analysis.services.subprocess.run')
     def test_empty_exclude_paths_adds_no_exclude_argument(self, mock_run):

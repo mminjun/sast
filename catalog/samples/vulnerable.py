@@ -1,7 +1,9 @@
 """TST-005 정탐 시험용 취약 샘플 — 의도적으로 취약하게 작성된 코드다.
 
-실행하거나 참고용으로 복사하지 말 것. catalog/rules의 KISA 룰 13개가 각각
-정확히 걸리는지 확인하는 고정 자산이며, 안전한 대응 코드는 safe.py에 있다.
+실행하거나 참고용으로 복사하지 말 것. catalog/rules의 Python 룰이 각각 정확히 걸리는지
+확인하는 고정 자산이며, 안전한 대응 코드는 safe.py에 있다. 기대 건수는 catalog/tests.py
+EXPECTED_SAMPLE_FINDINGS. "(taint)" 표시 케이스는 입력이 변수를 거쳐 싱크에 닿는 형태로,
+한 지점 패턴으로는 못 잡고 taint 룰(taint_python.yaml)만 잡는다.
 
 이 파일은 우리 SAST로 우리 코드를 분석할 때(도그푸딩) 당연히 탐지된다 —
 분석 대상에서 catalog/samples/를 제외하고 돌려야 한다.
@@ -21,7 +23,7 @@ import requests
 import yaml
 from Crypto.PublicKey import RSA
 from cryptography.hazmat.primitives.asymmetric import rsa
-from django.http import JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import redirect
 from django.views.decorators.csrf import csrf_exempt
 
@@ -151,6 +153,53 @@ def make_signing_key():
 
 def make_tls_key():
     return rsa.generate_private_key(public_exponent=65537, key_size=1024)  # KISA-SF-07
+
+
+# --- taint 전용 케이스 (taint_python.yaml) — 입력이 변수·가공을 거쳐 싱크에 닿는다 ---
+
+
+def find_user(conn, request):
+    q = request.GET.get("q")
+    sql = "SELECT * FROM users WHERE name = '" + q + "'"
+    cursor = conn.cursor()
+    cursor.execute(sql)  # KISA-IV-01 (taint)
+    return cursor.fetchall()
+
+
+def run_script(request):
+    src = request.POST["code"]
+    code = src.strip()
+    exec(code)  # KISA-IV-02 (taint)
+
+
+def download(request):
+    name = request.GET.get("f")
+    path = os.path.join("/var/reports", name)
+    return open(path, "rb").read()  # KISA-IV-03 (taint)
+
+
+def greet(request):
+    name = request.GET.get("name", "")
+    body = "<h1>Hello " + name + "</h1>"
+    return HttpResponse(body)  # KISA-IV-04 (taint)
+
+
+def traceroute(host):
+    cmd = "traceroute " + host
+    args = cmd + " -m 5"
+    return os.popen(args).read()  # KISA-IV-05 (taint)
+
+
+def after_login(request):
+    nxt = request.GET.get("next")
+    dest = nxt or "/"
+    return HttpResponseRedirect(dest)  # KISA-IV-07 (taint)
+
+
+def proxy(request):
+    url = request.GET["url"]
+    target = url.strip()
+    return requests.get(target, timeout=5)  # KISA-IV-12 (taint)
 
 
 def do_work():

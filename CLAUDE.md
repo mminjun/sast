@@ -49,6 +49,14 @@ KISA 개발보안 가이드 기반 SAST(정적 애플리케이션 보안 테스�
 - 테스트는 immediate 백엔드로 돌아 워커·Redis가 필요 없다. 큐 등록 자체를 검증하는 시험은
   `override_settings(TASKS=...)`로 DummyBackend를 쓴다.
 
+## 룰 작성
+
+- 새 룰은 스크래치에서 취약·안전 샘플로 정탐·오탐을 실측한 뒤 저장소로 옮긴다. 룰마다
+  `metadata.kisa_code`(필수)와 `metadata.engine`(taint 룰만 `semgrep-taint`)을 적는다.
+- 인젝션 계열 Python 룰은 `catalog/rules/taint_python.yaml`(mode: taint)에 있다. 같은 항목의 패턴
+  룰을 병행하지 않는다 — 핑거프린트는 KISA 코드 기준이라 같은 줄이 두 번 집계된다.
+- 샘플(`catalog/samples`)·기대 건수(`catalog/tests.py EXPECTED_*`)·`seed_catalog`를 함께 갱신한다.
+
 ## 테스트 실행
 
 - 평소(코드 고치며 반복, 약 1분):

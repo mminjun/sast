@@ -39,6 +39,7 @@ def ingest_on_run_succeeded(sender, run, **kwargs):
         return
 
     logger.info(
-        '분석 결과 표준화 완료 (run=%s): 저장 %d건, 격리 밖 경로로 제외 %d건, 미매핑 %d건',
-        run.pk, result.created, result.skipped, result.unmapped,
+        '분석 결과 표준화 완료 (run=%s): 저장 %d건, 격리 밖 경로로 제외 %d건, 미매핑 %d건, '
+        '오염 경로 %d건',
+        run.pk, result.created, result.skipped, result.unmapped, result.traced,
     )

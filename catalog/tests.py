@@ -32,11 +32,11 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings, tag
 from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
 from accounts.models import Role
 from analysis.models import AnalysisRun, AnalysisStatus
-from analysis.services import fs_path, run_semgrep, source_dir
+from analysis.services import DATAFLOW_TRACE_FILE, fs_path, run_semgrep, source_dir, workspace_dir
 from analysis.signals import run_succeeded
 from projects.models import Project, ProjectMember
 
@@ -45,6 +45,7 @@ from .models import DiagnosticRule, Finding, FindingStatus, KisaCategory, Severi
 from .services import (
     bare_check_id, ingest_findings, normalize_severity, previous_succeeded_run,
 )
+from .taint_trace import parse_trace_text
 from .views import FindingPagination
 
 User = get_user_model()
@@ -76,10 +77,11 @@ IMPLEMENTED_CODES = {
     'KISA-EN-01', 'KISA-EN-02', 'KISA-EN-03', 'KISA-EN-04',
     'KISA-AA-01', 'KISA-AA-02',
 }
-# 취약 샘플에서 나와야 하는 룰별 건수. 총 31건.
+# 취약 샘플에서 나와야 하는 룰별 건수. 총 38건. 인젝션 7항목(IV-01·02·03·04·05·07·12)은
+# taint 룰(taint_python.yaml)이 잡는다 — 직접 형태 + "변수를 거쳐 흐르는" (taint) 케이스 (9/6).
 EXPECTED_SAMPLE_FINDINGS = {
-    'KISA-IV-01': 1, 'KISA-IV-02': 1, 'KISA-IV-03': 1, 'KISA-IV-05': 2, 'KISA-IV-07': 1,
-    'KISA-IV-11': 1, 'KISA-IV-12': 2,
+    'KISA-IV-01': 2, 'KISA-IV-02': 2, 'KISA-IV-03': 2, 'KISA-IV-04': 1, 'KISA-IV-05': 3,
+    'KISA-IV-07': 2, 'KISA-IV-11': 1, 'KISA-IV-12': 3,
     'KISA-SF-04': 1, 'KISA-SF-06': 2, 'KISA-SF-07': 2, 'KISA-SF-08': 1, 'KISA-SF-11': 2,
     'KISA-SF-12': 1, 'KISA-SF-13': 1, 'KISA-SF-14': 1,
     'KISA-CE-02': 1, 'KISA-CE-05': 2, 'KISA-EH-01': 2, 'KISA-EH-03': 2, 'KISA-EN-02': 2,
@@ -505,10 +507,10 @@ class IngestTests(WorkspaceMixin, TestCase):
     def test_check_id_is_stored_without_config_prefix(self):
         target = self.write_source(self.run, 'app/db.py', 'q = 1\n')
         self.ingest([semgrep_result(
-            target, 'KISA-IV-01', check_id='catalog.rules.kisa-iv-01-sql-injection',
+            target, 'KISA-IV-01', check_id='catalog.rules.kisa-iv-01-sql-injection-taint',
         )])
         finding = Finding.objects.get(run=self.run)
-        self.assertEqual(finding.semgrep_check_id, 'kisa-iv-01-sql-injection')
+        self.assertEqual(finding.semgrep_check_id, 'kisa-iv-01-sql-injection-taint')
         self.assertIn(finding.semgrep_check_id, finding.rule.semgrep_rule_ids)
 
     def test_snippet_is_read_from_file_not_semgrep(self):
@@ -1247,11 +1249,35 @@ class DetectionSampleTests(WorkspaceMixin, TestCase):
         self.assertEqual(counts, EXPECTED_SAMPLE_FINDINGS)
 
     def test_safe_sample_produces_no_findings(self):
-        """오탐 통제 — 안전한 대응 코드에서 하나라도 나오면 룰이 과탐지하는 것이다."""
+        """오탐 통제 — 안전한 대응 코드에서 하나라도 나오면 룰이 과탐지하는 것이다.
+        taint 오탐 통제 케이스(매개변수를 받아 정규식·allowlist·타입 변환·파일명·인용·검증 헬퍼로
+        거른 함수)도 여기 들어 있다 — 걸리면 sanitizer 선언이 빠진 것이다."""
         run = self.analyze('safe.py')
         self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
         self.assertEqual(
             list(Finding.objects.filter(run=run).values_list('file_path', 'rule_code')), [])
+
+    def test_taint_findings_carry_engine_and_trace_from_real_output(self):
+        """실제 Semgrep 텍스트 출력에서 오염 경로가 붙는다 — 변수 경유 케이스의 줄 번호까지 맞아야
+        어댑터(catalog/taint_trace.py)가 이 버전의 형식을 읽고 있는 것이다."""
+        run = self.analyze('vulnerable.py')
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+        source = (SAMPLES_DIR / 'vulnerable.py').read_text(encoding='utf-8').splitlines()
+        sink_line = next(i for i, text in enumerate(source, 1) if 'os.popen(args)' in text)
+
+        taint = Finding.objects.filter(run=run, extra__engine='semgrep-taint')
+        self.assertEqual(taint.count(), 15)  # IV-01 2·IV-02 2·IV-03 2·IV-04 1·IV-05 3·IV-07 2·IV-12 3
+        self.assertEqual(taint.exclude(extra__has_key='taint_trace').count(), 0)
+        self.assertEqual(
+            Finding.objects.filter(run=run, extra__engine='semgrep-pattern').count(), 23,
+        )
+
+        trace = Finding.objects.get(run=run, start_line=sink_line).extra['taint_trace']
+        self.assertEqual(trace['source']['line'], sink_line - 3)   # def traceroute(host):
+        self.assertEqual([s['line'] for s in trace['steps']], [sink_line - 2, sink_line - 1])
+        self.assertEqual(trace['sink']['line'], sink_line)
+        self.assertTrue(all(node['path'] == 'src/vulnerable.py'
+                            for node in [trace['source'], trace['sink'], *trace['steps']]))
 
     def test_vulnerable_c_sample_triggers_every_c_rule(self):
         """C 룰 13개 정탐 (SFR-011, TST-005)."""
@@ -1938,3 +1964,331 @@ class RunChangesTests(CatalogApiTestCase):
         joined = '\n'.join(captured.output)
         self.assertIn('action=run_changes', joined)
         self.assertIn(f'project={self.project.pk}', joined)
+
+
+# ---------------------------------------------------------------------------
+# taint — 엔진 표시·오염 경로 (SFR-014, DAR-009 — docs/decisions.md 2026-09-06 taint)
+# ---------------------------------------------------------------------------
+
+# Semgrep 1.175.0 `--dataflow-traces --text-output` 실측 출력에서 딴 픽스처. 룰 id가 길어 두 줄로
+# 감긴 형태, finding 여러 건, 중간 변수 0개인 건을 포함한다.
+TRACE_TEXT = """
+┌─────────────────┐
+│ 3 Code Findings │
+└─────────────────┘
+
+    intra.py
+   ❯❯❱ C.Users.someone.scratch.taint.kisa-iv-05-os-command-
+       injection-taint
+          ❰❰ Blocking ❱❱
+          운영체제 명령어 삽입 (KISA-IV-05).
+
+            6┆ os.system(line)
+
+
+          Taint comes from:
+
+            3┆ def e1_var_hop(host):
+
+
+          Taint flows through these intermediate variables:
+
+            3┆ def e1_var_hop(host):
+
+            4┆ cmd = "ping " + host
+
+            5┆ line = cmd + " -c 1"
+
+
+                This is how taint reaches the sink:
+
+            6┆ os.system(line)
+
+
+            ⋮┆----------------------------------------
+           29┆ os.system(a + b)
+
+
+          Taint comes from:
+
+           28┆ def e7_two_sources(a, b):
+
+
+          Taint flows through these intermediate variables:
+
+           28┆ def e7_two_sources(a, b):
+
+
+                This is how taint reaches the sink:
+
+           29┆ os.system(a + b)
+
+    pkg\\other.py
+   ❯❯❱ catalog.rules.kisa-iv-01-sql-injection-taint
+          ❰❰ Blocking ❱❱
+          SQL 삽입 (KISA-IV-01).
+
+           12┆ cur.execute(sql)
+
+
+          Taint comes from:
+
+           10┆ q = request.GET.get("q")
+
+
+          Taint flows through these intermediate variables:
+
+           11┆ sql = "SELECT " + q
+
+
+                This is how taint reaches the sink:
+
+           12┆ cur.execute(sql)
+"""
+
+
+class TaintTraceAdapterTests(SimpleTestCase):
+    """텍스트 출력 → {(path, rule_id, sink_line): trace}. 어떤 입력에도 예외를 내지 않는다."""
+
+    def test_parses_wrapped_rule_id_and_multiple_findings(self):
+        traces = parse_trace_text(TRACE_TEXT)
+        self.assertEqual(
+            set(traces),
+            {
+                ('intra.py', 'kisa-iv-05-os-command-injection-taint', 6),
+                ('intra.py', 'kisa-iv-05-os-command-injection-taint', 29),
+                ('pkg\\other.py', 'kisa-iv-01-sql-injection-taint', 12),
+            },
+        )
+
+    def test_source_steps_sink_are_split_and_source_repeat_is_dropped(self):
+        trace = parse_trace_text(TRACE_TEXT)[('intra.py', 'kisa-iv-05-os-command-injection-taint', 6)]
+        self.assertEqual(trace['source'], {'line': 3, 'code': 'def e1_var_hop(host):'})
+        # Semgrep은 중간 변수 목록에 소스 줄을 한 번 더 넣는다 — 표시에 중복이라 뺀다.
+        self.assertEqual(
+            trace['steps'],
+            [{'line': 4, 'code': 'cmd = "ping " + host'}, {'line': 5, 'code': 'line = cmd + " -c 1"'}],
+        )
+        self.assertEqual(trace['sink'], {'line': 6, 'code': 'os.system(line)'})
+
+    def test_finding_without_intermediate_variables_has_empty_steps(self):
+        trace = parse_trace_text(TRACE_TEXT)[('intra.py', 'kisa-iv-05-os-command-injection-taint', 29)]
+        self.assertEqual(trace['steps'], [])
+        self.assertEqual(trace['source']['line'], 28)
+
+    def test_warning_and_info_rule_headers_are_recognized(self):
+        # 헤더 표식은 심각도별로 다르다(ERROR ❯❯❱ / WARNING ❯❱ / INFO ❱) — IV-07(WARNING)의 경로를
+        # 첫 판이 통째로 놓친 원인.
+        def block(marker, rule, line):
+            return (
+                f'   {marker} catalog.rules.{rule}\n'
+                '          ❰❰ Blocking ❱❱\n'
+                '          m\n'
+                f'           {line}┆ sink(x)\n'
+                '          Taint comes from:\n'
+                f'           {line - 1}┆ def f(x):\n'
+                '          Taint flows through these intermediate variables:\n'
+                f'           {line - 1}┆ def f(x):\n'
+                '                This is how taint reaches the sink:\n'
+                f'           {line}┆ sink(x)\n'
+            )
+        text = '    app.py\n' + block('❯❱', 'kisa-iv-07-open-redirect-taint', 10) + block('❱', 'info-rule', 20)
+        self.assertEqual(
+            set(parse_trace_text(text)),
+            {('app.py', 'kisa-iv-07-open-redirect-taint', 10), ('app.py', 'info-rule', 20)},
+        )
+
+    def test_wrapped_path_is_joined(self):
+        # Semgrep은 120칸에서 경로를 감는다 — 격리 작업 영역의 절대경로는 항상 그보다 길다
+        # (실제 실행에서 오염 경로가 한 건도 안 붙던 원인, 9/6).
+        text = (
+            '    \\\\?\\C:\\Users\\someone\\very\\long\\workspace\\path\\that\\exceeds\\the\\one\\hundred\\twenty\\column\\li'
+            '                     \n'
+            '  mit\\source\\src\\vulnerable.py                                          \n'
+            '   ❯❯❱ catalog.rules.kisa-iv-05-os-command-injection-taint\n'
+            '          ❰❰ Blocking ❱❱\n'
+            '          m\n'
+            '            6┆ os.system(line)\n'
+            '          Taint comes from:\n'
+            '            3┆ def f(host):\n'
+            '          Taint flows through these intermediate variables:\n'
+            '            4┆ cmd = host\n'
+            '                This is how taint reaches the sink:\n'
+            '            6┆ os.system(line)\n'
+        )
+        traces = parse_trace_text(text)
+        expected_path = (
+            '\\\\?\\C:\\Users\\someone\\very\\long\\workspace\\path\\that\\exceeds\\the\\one\\hundred\\twenty\\column\\li'
+            'mit\\source\\src\\vulnerable.py'
+        )
+        self.assertEqual(list(traces), [(expected_path, 'kisa-iv-05-os-command-injection-taint', 6)])
+
+    def test_garbage_and_empty_input_yield_nothing(self):
+        for text in ('', None, 'hello\n', '   1┆ x\n', '┆┆┆', TRACE_TEXT.replace('┆', '|')):
+            self.assertEqual(parse_trace_text(text), {}, repr(text)[:40])
+
+
+class IngestEngineAndTraceTests(WorkspaceMixin, TestCase):
+    """extra.engine / extra.taint_trace가 결과에 붙는 규칙 (IngestTests와 같은 준비 — 상속하면
+    부모 시험이 한 번 더 돌아 따로 둔다)."""
+
+    def setUp(self):
+        super().setUp()
+        seed()
+        self.setup_workspace()
+        self.admin = User.objects.create_user(
+            email='admin@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        self.project = Project.objects.create(name='p', created_by=self.admin)
+        self.run = self.make_run(self.project, self.admin)
+
+    def ingest(self, results):
+        self.run.raw_result = {'results': results}
+        self.run.save(update_fields=['raw_result'])
+        return ingest_findings(self.run)
+
+    def _taint_result(self, target, kisa_code='KISA-IV-05', line=6, check_id='kisa-iv-05-os-command-injection-taint'):
+        item = semgrep_result(target, kisa_code, line=line, check_id=f'catalog.rules.{check_id}')
+        item['extra']['metadata']['engine'] = 'semgrep-taint'
+        return item
+
+    def _write_trace(self, target, rule_id, sink_line, source_line, step_lines):
+        """실행이 남겼을 텍스트를 작업 영역에 만든다 — 경로는 Semgrep에 넘긴 확장 절대경로 형식."""
+        lines = [
+            f'    {fs_path(target)}',
+            f'   ❯❯❱ catalog.rules.{rule_id}',
+            '          ❰❰ Blocking ❱❱',
+            '          m',
+            f'           {sink_line}┆ sink()',
+            '          Taint comes from:',
+            f'           {source_line}┆ def f(x):',
+            '          Taint flows through these intermediate variables:',
+            *[f'           {n}┆ step{n} = x' for n in step_lines],
+            '                This is how taint reaches the sink:',
+            f'           {sink_line}┆ sink()',
+        ]
+        trace_path = workspace_dir(self.run) / DATAFLOW_TRACE_FILE
+        trace_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+    def test_pattern_result_defaults_to_semgrep_pattern_engine(self):
+        target = self.write_source(self.run, 'app.py', 'x = 1\n')
+        self.ingest([semgrep_result(target, 'KISA-SF-06')])
+        finding = Finding.objects.get(run=self.run)
+        self.assertEqual(finding.extra['engine'], 'semgrep-pattern')
+        self.assertNotIn('taint_trace', finding.extra)
+
+    def test_taint_result_gets_engine_and_trace_by_path_rule_and_sink_line(self):
+        target = self.write_source(self.run, 'app.py', 'def f(x):\n    a = x\n    b = a\n    sink()\n')
+        self._write_trace(target, 'kisa-iv-05-os-command-injection-taint', sink_line=4, source_line=1, step_lines=[2, 3])
+
+        result = self.ingest([self._taint_result(target, line=4)])
+
+        finding = Finding.objects.get(run=self.run)
+        self.assertEqual(finding.extra['engine'], 'semgrep-taint')
+        self.assertEqual(finding.extra['taint_trace'], {
+            'source': {'path': 'app.py', 'line': 1, 'code': 'def f(x):'},
+            'steps': [
+                {'path': 'app.py', 'line': 2, 'code': 'step2 = x'},
+                {'path': 'app.py', 'line': 3, 'code': 'step3 = x'},
+            ],
+            'sink': {'path': 'app.py', 'line': 4, 'code': 'sink()'},
+        })
+        self.assertEqual(result.traced, 1)
+
+    def test_trace_for_other_line_or_rule_is_not_attached(self):
+        target = self.write_source(self.run, 'app.py', 'def f(x):\n    sink()\n    sink()\n')
+        self._write_trace(target, 'kisa-iv-05-os-command-injection-taint', sink_line=3, source_line=1, step_lines=[])
+
+        with self.assertLogs('catalog.services', level='INFO'):
+            self.ingest([
+                self._taint_result(target, line=2),  # 다른 줄 — 경로 없음
+                self._taint_result(target, line=3),  # 일치
+            ])
+
+        by_line = {f.start_line: f for f in Finding.objects.filter(run=self.run)}
+        self.assertNotIn('taint_trace', by_line[2].extra)
+        self.assertIn('taint_trace', by_line[3].extra)
+
+    def test_missing_trace_file_keeps_findings_and_warns(self):
+        # 실행이 텍스트를 남기지 않았거나 형식이 바뀐 경우 — 탐지 결과는 그대로, 경고만 남긴다.
+        target = self.write_source(self.run, 'app.py', 'def f(x):\n    sink()\n')
+        with self.assertLogs('catalog.services', level='WARNING') as logs:
+            result = self.ingest([self._taint_result(target, line=2)])
+        self.assertEqual(result.created, 1)
+        self.assertEqual(result.traced, 0)
+        self.assertNotIn('taint_trace', Finding.objects.get(run=self.run).extra)
+        self.assertIn('오염 경로가 한 건도 붙지 않았습니다', logs.output[0])
+        self.assertIn('trace 파일 없음', logs.output[0])
+
+    def test_unparseable_trace_file_keeps_findings_and_warns(self):
+        target = self.write_source(self.run, 'app.py', 'def f(x):\n    sink()\n')
+        (workspace_dir(self.run) / DATAFLOW_TRACE_FILE).write_text('completely different format\n', encoding='utf-8')
+        with self.assertLogs('catalog.services', level='WARNING') as logs:
+            result = self.ingest([self._taint_result(target, line=2)])
+        self.assertEqual(result.created, 1)
+        self.assertIn('trace 파일 있음', logs.output[0])
+
+    def test_pattern_only_results_do_not_warn(self):
+        target = self.write_source(self.run, 'app.py', 'x = 1\n')
+        with self.assertNoLogs('catalog.services', level='WARNING'):
+            self.ingest([semgrep_result(target, 'KISA-SF-06')])
+
+    def test_trace_does_not_change_fingerprint(self):
+        # extra는 핑거프린트 입력이 아니다 — 경로 표시가 바뀌어도 diff·판정 승계가 흔들리지 않는다.
+        target = self.write_source(self.run, 'app.py', 'def f(x):\n    sink()\n')
+        self.ingest([self._taint_result(target, line=2)])
+        without = Finding.objects.get(run=self.run).fingerprint
+        self._write_trace(target, 'kisa-iv-05-os-command-injection-taint', sink_line=2, source_line=1, step_lines=[])
+        self.ingest([self._taint_result(target, line=2)])
+        with_trace = Finding.objects.get(run=self.run)
+        self.assertIn('taint_trace', with_trace.extra)
+        self.assertEqual(with_trace.fingerprint, without)
+
+    def test_reingest_response_reports_traced(self):
+        target = self.write_source(self.run, 'app.py', 'def f(x):\n    sink()\n')
+        self._write_trace(target, 'kisa-iv-05-os-command-injection-taint', sink_line=2, source_line=1, step_lines=[])
+        self.run.raw_result = {'results': [self._taint_result(target, line=2)]}
+        self.run.save(update_fields=['raw_result'])
+        client = APIClient()
+        client.force_authenticate(user=self.admin)
+        response = client.post(reingest_url(self.run.pk))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['traced'], 1)
+
+
+class SeedEngineValidationTests(TestCase):
+    """metadata.engine은 허용 목록 밖이면 시드가 거부한다 — 결과의 extra.engine에 오타가 실리지 않게."""
+
+    def _rules_dir(self, filename, body):
+        tmp = Path(tempfile.mkdtemp(prefix='catalog-rules-'))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / filename).write_text(body, encoding='utf-8')
+        return tmp
+
+    def test_rejects_unknown_engine(self):
+        rules_dir = self._rules_dir('x.yaml', (
+            'rules:\n'
+            '  - id: r1\n'
+            '    languages: [python]\n'
+            '    severity: ERROR\n'
+            '    message: m\n'
+            '    metadata: {kisa_code: KISA-IV-01, engine: semgrep-tanit}\n'
+            '    pattern: eval(...)\n'
+        ))
+        with override_settings(CATALOG_RULES_DIR=rules_dir):
+            with self.assertRaises(CommandError) as ctx:
+                call_command('seed_catalog', '--dry-run')
+        self.assertIn('metadata.engine', str(ctx.exception))
+
+    def test_accepts_known_engines(self):
+        rules_dir = self._rules_dir('x.yaml', (
+            'rules:\n'
+            '  - id: r1\n'
+            '    languages: [python]\n'
+            '    severity: ERROR\n'
+            '    message: m\n'
+            '    metadata: {kisa_code: KISA-IV-01, engine: semgrep-taint}\n'
+            '    pattern: eval(...)\n'
+        ))
+        with override_settings(CATALOG_RULES_DIR=rules_dir):
+            call_command('seed_catalog', '--dry-run')
