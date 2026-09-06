@@ -9,9 +9,18 @@ from projects.models import Project
 
 
 class AnalysisStatus(models.TextChoices):
-    """분석 실행 상태 (SFR-015)."""
+    """분석 실행 상태 (SFR-015).
+
+    PENDING → QUEUED → RUNNING → SUCCEEDED / FAILED (FAILED → QUEUED 재실행 가능).
+
+    QUEUED는 "실행을 요청했고 워커가 집어 가길 기다리는 중"이다. PENDING("업로드만 됨")이
+    이 역할을 겸할 수 없는 이유: 화면의 실행 버튼은 PENDING·FAILED에만 보이는데, 큐 대기를
+    PENDING으로 두면 대기 중에도 버튼이 떠 중복 등록을 유도하고, 사용자가 "아직 안 눌렀음"과
+    "눌렀는데 기다리는 중"을 구분할 수 없다 (docs/decisions.md 2026-09-06).
+    """
 
     PENDING = 'PENDING', '대기'
+    QUEUED = 'QUEUED', '대기열'
     RUNNING = 'RUNNING', '실행중'
     SUCCEEDED = 'SUCCEEDED', '완료'
     FAILED = 'FAILED', '실패'
@@ -58,6 +67,9 @@ class AnalysisRun(models.Model):
     error_message = models.TextField('오류 메시지', blank=True)
 
     created_at = models.DateTimeField('생성 일시', auto_now_add=True)
+    # 큐 등록 시각. 화면이 "대기열에 오래 머묾"(워커 미기동) 힌트를 이 값으로 판단한다.
+    queued_at = models.DateTimeField('큐 등록 일시', null=True, blank=True)
+    # 워커가 실제로 집어 간 시각(RUNNING 전환). 고착 판정(reap_stale_runs)의 기준.
     started_at = models.DateTimeField('실행 시작 일시', null=True, blank=True)
     finished_at = models.DateTimeField('종료 일시', null=True, blank=True)
 

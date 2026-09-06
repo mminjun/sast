@@ -12,14 +12,14 @@
 | SFR-005 | 프로젝트 사용자 할당 | ✅ | projects/views.py `members`/`member_detail` + frontend `ProjectDetailPage` 멤버 섹션 | 개별 추가·해제, assigned_by·assigned_at 기록. 사용자 목록 API 신설(8/28 저녁)로 할당·해제 UI 완결 — 셀렉트로 할당, 해제 즉시 404. members API는 무수정 재활용 |
 | SFR-006 | 프로젝트 조회 범위 | ✅ | projects/views.py `get_queryset` | 관리자=전체, 일반=할당분만. 브라우저 E2E — 일반 계정 목록에 할당분만 표시(8/28) |
 | SFR-007 | 분석 대상 소스 관리 | ✅ | analysis/views.py `ProjectAnalysisRunsView` + frontend `ProjectDetailPage` | zip 업로드, Zip Slip 방어(SEC-008), 관리자만. 업로드 UI 완결(8/28) |
-| SFR-008 | 정적 분석 실행 | ✅ | analysis/views.py `AnalysisRunExecuteView` + frontend 실행 버튼(`ProjectDetailPage`/`RunDetailPage`) | 업로드와 분리된 2단계 트리거, 관리자만. 동기 실행 중 버튼 잠금 UI(8/28) |
-| SFR-009 | 분석 처리 체계 | ✅ | analysis/services.py `run_semgrep` | Semgrep subprocess 동기 연계. 룰셋을 `p/python`에서 자체 KISA 룰(`catalog/rules/`)로 교체 완료. `--no-git-ignore`·`PYTHONUTF8=1`·`encoding='utf-8'` 필요 (docs/decisions.md 외부 도구 연계 문제) |
+| SFR-008 | 정적 분석 실행 | ✅ | analysis/views.py `AnalysisRunExecuteView` + analysis/tasks.py `run_analysis` + frontend 실행 버튼(`ProjectDetailPage`/`RunDetailPage`) | 업로드와 분리된 2단계 트리거, 관리자만. 9/6부터 요청은 큐 등록(QUEUED, 202)만 하고 워커(`manage.py analysis_worker`)가 실행 — 대형 코드베이스·다중 사용자·동시 실행 수 제한을 한 번에 해결. 화면은 3초 폴링, 5분 이상 대기열이면 워커 확인 힌트 |
+| SFR-009 | 분석 처리 체계 | ✅ | analysis/services.py `run_semgrep` + django.tasks(DB 백엔드 django-tasks-db) | Semgrep subprocess를 워커 프로세스에서 실행(9/6, 큐는 PostgreSQL 테이블 — Redis 등 새 인프라 없음, Celery 미채택 근거는 decisions.md 9/6). 룰셋은 자체 KISA 룰(`catalog/rules/`). `--no-git-ignore`·`PYTHONUTF8=1`·`encoding='utf-8'` 필요 (docs/decisions.md 외부 도구 연계 문제) |
 | SFR-010 | 분석 언어 확장성 | ✅ | catalog/rules + catalog 전반 | 완료(9/2 판정 조정, decisions.md) — 요구는 "확장 가능한 구조"이고 카탈로그 49개는 언어 중립, 파서·모델·API에 언어 분기 없이 룰 YAML 추가만으로 확장, 엔진이 다중 언어 지원. 실제 추가 언어 룰 작성은 SFR-011로 분리 — 9/4 C, 9/5 Java·JS 룰 추가로 실증(같은 항목을 최대 4개 언어 룰이 각각 탐지, 파서·모델·API 변경 0) |
 | SFR-011 | 초기 분석 대상 지원 | ✅ | catalog/rules/{c,java,js}_*.yaml, `catalog/samples/vulnerable.{c,java,js}`·`safe.*`, settings `ANALYSIS_SCAN_TARGET_SUFFIXES` | 완료(9/5 판정, decisions.md) — Python·C·Java·JS/TS 4개 언어 구현: 9/4 C 룰 13개(신규 실탐지 6개), 9/5 Java 35룰·JS 30룰(신규 실탐지 12개, 합계 39/49). 확장자 .py/.c/.h/.java/.js/.jsx/.ts/.tsx. 한계: 룰은 문법 패턴 기반이라 변수 경유(taint)는 미구현 — 못 잡는 항목과 룰별 한계는 decisions.md 9/4·9/5 |
 | SFR-012 | 진단 항목 등록 | ✅ | catalog/management/commands/seed_catalog.py | 룰 YAML 1개 추가 + 시드 재실행이면 코드 수정 없이 카탈로그 반영. kisa_code 오타는 시드 시점에 실패(드리프트 감지) |
 | SFR-013 | 진단 기준 카탈로그 | ✅ | catalog/models.py `DiagnosticRule` + `/api/catalog/rules/` + frontend `CatalogPage` | 49개 전부 등록, 그중 39개 실탐지(8/29 룰 8개 추가, 9/4 C 룰로 6개, 9/5 Java·JS 룰로 12개 추가). 유형·심각도·구현여부 필터, `/api/catalog/summary/` 집계. 49개 표시·필터 UI 완결(8/28). 심각도 범례 카드(등급 정책·폴백 각주, 8/29) |
 | SFR-014 | 분석 결과 표준화 | ✅ | catalog/services.py `ingest_findings` | raw_result → Finding. 실행 성공 시 시그널로 자동 연결, 멱등. 관리자용 재표준화 API 별도 |
-| SFR-015 | 분석 실행 상태 관리 | ✅ | analysis/models.py `AnalysisStatus` + frontend `StatusBadge` | 대기/실행중/완료/실패 4상태. 원자적 전환으로 RUNNING 관측 가능. 4상태 배지 UI 표시(8/28) |
+| SFR-015 | 분석 실행 상태 관리 | ✅ | analysis/models.py `AnalysisStatus` + frontend `StatusBadge` | 대기/대기열/실행중/완료/실패 5상태(9/6 QUEUED 추가 — "안 눌렀음"과 "눌렀는데 기다림" 구분). PENDING→QUEUED(요청)·QUEUED→RUNNING(워커) 각각 조건부 UPDATE로 원자적 전환. 배지 UI 표시 |
 | SFR-016 | 분석 결과 조회 | ✅ | catalog/views.py `RunFindingListView`/`RunFindingSummaryView` + frontend `RunDetailPage` | 실행별 결과 목록 + 심각도·항목별 집계. 심각도 높은 순 정렬. 집계 카드·목록·코드조각 UI 완결(8/28) |
 | SFR-017 | 진단 결과 검색·필터 | ✅ | catalog/views.py `RunFindingListView.get_queryset` + frontend 필터 칩 | severity·category·rule·q 필터. 알 수 없는 값은 400. 심각도 필터 칩·페이지네이션(50) UI 완결(8/28) |
 
@@ -48,7 +48,7 @@
 | SEC-006 | 비인가 정보 노출 방지 | ✅ | 전 앱 (기본 수준, plan.md §5) | 미할당·미존재 동일 404(본문까지 동일), 쓰기 균일 403, **스코프 검사가 필터 검증보다 먼저**라 400/404 차이로 존재를 떠볼 수 없음. 응답·저장값에 서버 절대경로·workspace UUID 없음. 프론트도 404 사유를 구분 없이 "찾을 수 없습니다"로만 표시(8/28) |
 | SEC-007 | 분석 작업 영역 격리 | ✅ | analysis/services.py `workspace_dir` + catalog/services.py `_relative_path` | 실행별 디렉토리 분리. Semgrep이 돌려준 절대경로를 상대경로로 정규화하고, 격리 밖 경로의 결과는 저장하지 않음 |
 | SEC-008 | 파일 경로 검증 | ✅ | analysis/services.py `_is_unsafe_member` | 절대경로·드라이브문자·`..`·심볼릭링크·resolve() 최종검증 다중 방어, zip bomb 상한(기본 zip 200MB·해제 500MB·20,000개, .env로 조정) |
-| SEC-009 | 분석 실행 보호 | ✅ | analysis/services.py + catalog/services.py `ingest_findings` | Semgrep 타임아웃(기본 600초, .env로 조정), 실행 상태 원자적 전환. 표준화는 `select_for_update`로 직렬화, 코드 조각은 파일 크기·줄 길이 상한(secure-review 수정) |
+| SEC-009 | 분석 실행 보호 | ✅ | analysis/services.py + analysis/tasks.py + catalog/services.py `ingest_findings` | Semgrep 타임아웃(기본 600초, .env로 조정). 실행 상태 원자적 전환 2지점(큐 등록·워커 픽업)으로 중복 실행 방어 — 워커 다중·재전달에도 Semgrep은 한 번. 동시 실행 수 = 워커 프로세스 수. 워커 중단으로 RUNNING에 고착된 실행은 워커 시작 시 자동 정리(`reap_stale_runs`, 타임아웃+300초). 표준화는 `select_for_update`로 직렬화, 코드 조각은 파일 크기·줄 길이 상한 |
 | SEC-010 | 외부 구성요소 관리 | ✅ | requirements.txt | 직접 의존성 6종 버전 고정. Semgrep 1.175.0(LGPL-2.1, subprocess 호출만이라 카피레프트 미전이), PyYAML 6.0.3(MIT), `--metrics=off`로 텔레메트리 차단. 운영 배포 전 후속 과제: DRF BrowsableAPIRenderer 비활성 |
 
 ## TST (테스트)

@@ -41,6 +41,14 @@ KISA 개발보안 가이드 기반 SAST(정적 애플리케이션 보안 테스�
   주석에 남긴다 (추적성).
 - 기능 구현 완료 시 docs/requirements-map.md의 해당 번호 상태를 갱신한다.
 - 하루 작업 종료 시 docs/worklog.md에 기록을 남긴다.
+## 개발 실행
+
+- 분석 실행은 큐(django.tasks, DB 백엔드)에 등록만 되고 워커가 처리한다. 화면에서 실행을
+  확인하려면 runserver 외에 `venv\Scripts\python manage.py analysis_worker`를 따로 띄운다
+  (semgrep이 PATH에 있어야 하므로 venv\Scripts 경로 포함). 워커 없이는 QUEUED에 머문다.
+- 테스트는 immediate 백엔드로 돌아 워커·Redis가 필요 없다. 큐 등록 자체를 검증하는 시험은
+  `override_settings(TASKS=...)`로 DummyBackend를 쓴다.
+
 ## 테스트 실행
 
 - 평소(코드 고치며 반복, 약 1분):

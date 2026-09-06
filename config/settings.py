@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     # 서드파티
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',  # 로그아웃 시 refresh 토큰 폐기
+    'django_tasks_db',  # 분석 실행 큐(django.tasks DB 백엔드) — 아래 TASKS 참고
 
     # 프로젝트 앱 — 책임별 분리 (QLT-001)
     'accounts',   # 사용자 인증, 역할, 권한
@@ -248,6 +249,38 @@ CATALOG_SEED_FILE = BASE_DIR / 'catalog' / 'data' / 'kisa_rules.json'
 ANALYSIS_SEMGREP_CONFIG = str(CATALOG_RULES_DIR)
 # 초 — 타임아웃 시 FAILED로 기록. 수천 파일 규모 프로젝트는 2분으로 부족해 .env로 조정한다.
 ANALYSIS_SEMGREP_TIMEOUT = int(os.getenv('ANALYSIS_SEMGREP_TIMEOUT', '600'))
+
+# 분석 실행 큐 (SFR-008~009, SFR-015, SEC-009 — docs/decisions.md 2026-09-06)
+# 실행 요청은 큐에 등록만 하고(QUEUED) 별도 워커(manage.py analysis_worker)가 Semgrep을 돌린다.
+# 큐는 Django 6.1 내장 Tasks 프레임워크이고 백엔드는 두 가지만 둔다:
+#   database  — django-tasks-db. 큐가 PostgreSQL 테이블이라 Redis 같은 새 인프라가 없다. 기본값.
+#               워커를 띄우지 않으면 실행이 QUEUED에 머문다 (화면이 5분 뒤 힌트를 띄운다).
+#   immediate — Django 코어. 요청 안에서 동기 실행(큐 도입 전과 같은 동작). 워커 없는 환경의
+#               탈출구이자 테스트 모드 — 옛 동기 코드 경로를 따로 남기지 않고 이 설정이 대신한다.
+_TASK_BACKENDS = {
+    'database': 'django_tasks_db.DatabaseBackend',
+    'immediate': 'django.tasks.backends.immediate.ImmediateBackend',
+}
+ANALYSIS_TASK_BACKEND = os.getenv('ANALYSIS_TASK_BACKEND', 'database').strip().lower()
+if ANALYSIS_TASK_BACKEND not in _TASK_BACKENDS:
+    raise ValueError(
+        f'ANALYSIS_TASK_BACKEND={ANALYSIS_TASK_BACKEND!r}: '
+        f'{", ".join(_TASK_BACKENDS)} 중 하나여야 합니다.'
+    )
+# 테스트 실행 중에는 항상 immediate — 워커·Redis 없이 요청 안에서 큐 등록→실행→결과까지 끝나
+# 기존 실행 시험이 그대로 유효하다. 큐 등록 자체를 검증하는 시험은 override_settings로
+# DummyBackend를 지정한다 (analysis/tests.py). 비밀번호 해셔 스위치(위)와 같은 방식.
+if sys.argv[1:2] == ['test']:
+    ANALYSIS_TASK_BACKEND = 'immediate'
+TASKS = {
+    'default': {
+        'BACKEND': _TASK_BACKENDS[ANALYSIS_TASK_BACKEND],
+        'QUEUES': ['default'],
+    }
+}
+# RUNNING 고착 판정 여유(초). 워커가 작업 중 죽으면 run이 RUNNING에 남는데, Semgrep 타임아웃에
+# 이 여유를 더한 시간보다 오래된 RUNNING은 워커 시작 시 FAILED로 정리한다 (services.reap_stale_runs).
+ANALYSIS_STALE_RUN_GRACE = int(os.getenv('ANALYSIS_STALE_RUN_GRACE', '300'))
 
 # 분석 대상 언어 파일 확장자. 카탈로그 룰이 다루는 언어(Python: .py, C: .c/.h,
 # Java: .java, JavaScript/TypeScript: .js/.jsx/.ts/.tsx)와 맞춘다 — 다른 언어 룰을

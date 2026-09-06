@@ -19,7 +19,8 @@ from projects.models import Project
 
 from .models import AnalysisRun
 from .serializers import AnalysisRunSerializer, AnalysisRunUploadSerializer
-from .services import run_semgrep, start_run
+from .services import mark_queued, unmark_queued
+from .tasks import run_analysis
 
 
 def _scoped_projects(user):
@@ -122,9 +123,12 @@ class AnalysisRunDetailView(generics.RetrieveAPIView):
 class AnalysisRunExecuteView(APIView):
     """분석 실행 트리거 (SFR-008~009, 관리자 전용).
 
-    업로드(소스 등록)와 실행을 분리한 API 2단계 중 두 번째 — 대기/실행중/완료/실패
-    4개 상태가 실제로 관찰 가능하고, 업로드 실패와 분석 실패를 독립적으로
-    재시도할 수 있다.
+    업로드(소스 등록)와 실행을 분리한 API 2단계 중 두 번째 — 대기/대기열/실행중/완료/실패
+    상태가 실제로 관찰 가능하고, 업로드 실패와 분석 실패를 독립적으로 재시도할 수 있다.
+
+    요청은 큐에 등록만 하고 202로 즉시 응답한다. 실제 실행은 워커가 하고 화면은 폴링으로
+    상태를 본다. 큐 백엔드가 immediate(테스트·워커 없는 환경)면 등록이 곧 실행이라 같은
+    응답에 완료 상태가 실려 온다 — 코드 경로는 하나다 (config/settings.py TASKS).
     """
 
     permission_classes = [IsAuthenticated, IsAdminRole]
@@ -132,14 +136,24 @@ class AnalysisRunExecuteView(APIView):
     def post(self, request, pk):
         run = get_object_or_404(_scoped_analysis_runs(request.user), pk=pk)
 
-        # 상태 확인과 RUNNING 전환을 하나의 조건부 UPDATE로 묶어 원자적으로 만든다 —
+        # 상태 확인과 QUEUED 전환을 하나의 조건부 UPDATE로 묶어 원자적으로 만든다 —
         # 거의 동시에 들어온 두 번째 실행 요청은 이 시점에 이미 막힌다 (SEC-009).
-        if not start_run(run):
+        if not mark_queued(run):
             return Response(
-                {'detail': '이미 실행 중이거나 완료된 분석입니다.'},
+                {'detail': '이미 대기열에 있거나 실행 중이거나 완료된 분석입니다.'},
                 status=status.HTTP_409_CONFLICT,
             )
 
-        run_semgrep(run)
+        # 위 UPDATE는 autocommit으로 이미 커밋됐으므로 워커가 QUEUED를 본다.
+        # transaction.on_commit을 쓰지 않는 이유: 뷰는 atomic 블록 밖이라 이득이 없고,
+        # TestCase 안에서는 on_commit 콜백이 실행되지 않아 실행 시험 전부가 깨진다.
+        try:
+            run_analysis.enqueue(run.pk)
+        except Exception:
+            # 큐 등록에 실패하면 "작업 없는 QUEUED"가 남지 않게 되돌린 뒤 500으로 올린다.
+            unmark_queued(run)
+            raise
+
+        # immediate 백엔드면 여기서 이미 끝나 있다 — 실제 상태를 다시 읽어 돌려준다.
         run.refresh_from_db()
-        return Response(AnalysisRunSerializer(run).data)
+        return Response(AnalysisRunSerializer(run).data, status=status.HTTP_202_ACCEPTED)

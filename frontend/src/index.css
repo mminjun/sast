@@ -390,6 +390,12 @@ td.truncate-sm {
   color: #374151;
 }
 
+/* 대기열 — 아직 워커가 집어 가기 전. 실행중(파랑)과 구분되게 호박색. */
+.status-queued {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .status-running {
   background: #dbeafe;
   color: var(--low);

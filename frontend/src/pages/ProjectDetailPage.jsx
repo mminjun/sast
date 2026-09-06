@@ -7,6 +7,9 @@ import ProjectDashboard from '../components/ProjectDashboard.jsx';
 import SeverityBadge from '../components/SeverityBadge.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { formatDateTime, formatUser } from '../utils/format.js';
+import {
+  POLL_INTERVAL_MS, QUEUED_STALE_HINT, isInProgress, isQueuedTooLong,
+} from '../utils/runStatus.js';
 
 export default function ProjectDetailPage() {
   const { id } = useParams();
@@ -20,8 +23,12 @@ export default function ProjectDetailPage() {
   const [uploading, setUploading] = useState(false);
   // 커스텀 파일 버튼용 — 브라우저 기본 input 표시 대신 선택된 파일명을 직접 보여준다.
   const [selectedFileName, setSelectedFileName] = useState('');
-  // 실행은 동기(최대 10분, ANALYSIS_SEMGREP_TIMEOUT) — 실행 중인 run id를 기억해 해당 버튼만 잠근다.
+  // 실행 요청은 큐 등록(즉시 202) — 등록 요청 중인 run id를 기억해 해당 버튼만 잠근다.
+  // 실제 진행은 워커가 하고, 아래 폴링이 완료를 알아챈다.
   const [executingId, setExecutingId] = useState(null);
+  // 폴링 콜백이 최신 목록과 비교하려고 쓰는 거울 — 인터벌 클로저의 runs는 낡은 값이다.
+  const runsRef = useRef(null);
+  runsRef.current = runs;
   const [executeError, setExecuteError] = useState('');
   const fileInputRef = useRef(null);
   // 멤버 할당·해제는 관리자 전용 — 서버의 members API도 IsAdminRole로 닫혀 있어
@@ -155,13 +162,37 @@ export default function ProjectDetailPage() {
     }
   };
 
+  // 대기열·실행중 실행이 있는 동안 목록을 주기적으로 다시 읽는다 — 실행은 워커가 하므로
+  // 화면이 완료를 알 길은 폴링뿐이다. 어떤 실행이 종료 상태로 바뀌면 변화량도 갱신한다.
+  const inProgress = runs?.some((r) => isInProgress(r.status)) ?? false;
+  useEffect(() => {
+    if (!inProgress) return undefined;
+    const timer = setInterval(() => {
+      api(`/api/projects/${id}/analysis-runs/`)
+        .then((next) => {
+          const before = runsRef.current || [];
+          const finished = before.some((prev) => {
+            const now = next.find((n) => n.id === prev.id);
+            return isInProgress(prev.status) && now && !isInProgress(now.status);
+          });
+          setRuns(next);
+          if (finished) loadRunChanges();
+        })
+        .catch(() => {}); // 일시적 실패는 다음 폴링이 만회한다
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [id, inProgress]);
+
+  // 폴링이 3초마다 다시 그리므로 "대기열에 오래 머묾" 판정도 자연히 갱신된다.
+  const queuedTooLong = runs?.some((r) => isQueuedTooLong(r)) ?? false;
+
   const handleExecute = async (runId) => {
     setExecuteError('');
     setExecutingId(runId);
     try {
+      // 응답은 큐에 등록된 상태(QUEUED). 완료·변화량은 위 폴링이 반영한다.
       const updated = await api(`/api/analysis-runs/${runId}/execute/`, { method: 'POST' });
       setRuns((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
-      loadRunChanges(); // 새 완료 실행이 생겼으니 변화량도 갱신
     } catch (err) {
       setExecuteError(err instanceof ApiError ? err.detail : '실행 요청에 실패했습니다.');
     } finally {
@@ -210,13 +241,14 @@ export default function ProjectDetailPage() {
           <span className="muted">
             {runs?.some((r) => r.status === 'SUCCEEDED')
               ? '수정한 소스를 zip으로 업로드하세요 (zip 200MB·파일 20,000개 이하). 실행하면 이전 회차와 비교해 신규·해결 항목을 보여줍니다.'
-              : '분석할 소스를 zip으로 업로드하세요 (zip 200MB·파일 20,000개 이하). 실행하면 취약점을 진단합니다 (최대 10분).'}
+              : '분석할 소스를 zip으로 업로드하세요 (zip 200MB·파일 20,000개 이하). 실행하면 대기열에 등록되고 워커가 순서대로 진단합니다 (건당 최대 10분).'}
           </span>
           {uploadError && <p className="form-error">{uploadError}</p>}
         </form>
       )}
 
       {executeError && <p className="form-error">{executeError}</p>}
+      {queuedTooLong && <p className="form-error">{QUEUED_STALE_HINT}</p>}
       {runs?.length === 0 && (
         <p className="muted">아직 분석 이력이 없습니다. zip을 업로드해 첫 분석을 시작하세요.</p>
       )}
@@ -300,7 +332,7 @@ export default function ProjectDetailPage() {
                       disabled={executingId !== null}
                       onClick={() => handleExecute(run.id)}
                     >
-                      {executingId === run.id ? '분석 중… (최대 10분)' : '실행'}
+                      {executingId === run.id ? '등록 중…' : '실행'}
                     </button>
                   )}
                   {(run.status === 'SUCCEEDED' || run.status === 'FAILED') && (

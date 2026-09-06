@@ -36,6 +36,7 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
             'error_message',
             'severity_counts',
             'created_at',
+            'queued_at',
             'started_at',
             'finished_at',
         )

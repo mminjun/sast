@@ -24,3 +24,10 @@ semgrep==1.175.0
 # 끌어오지 않으므로(pip show pyyaml의 Required-by 비어 있음) 전이 의존성이 아니라
 # 우리 직접 의존성이다. 라이선스: MIT.
 PyYAML==6.0.3
+
+# 분석 실행 백그라운드 큐 (SFR-008~009, SFR-015, SEC-009)
+# Django 6.1 내장 Tasks 프레임워크(django.tasks)의 DB 백엔드 — 큐를 PostgreSQL 테이블로 두어
+# Redis 등 새 인프라 없이 워커(manage.py analysis_worker)가 작업을 가져간다. Celery·RQ·huey를
+# 쓰지 않은 근거는 docs/decisions.md 2026-09-06. 라이선스: BSD-3-Clause.
+# (typing_extensions / django-stubs-ext는 이 패키지가 끌어오는 전이 의존성)
+django-tasks-db==0.13.0

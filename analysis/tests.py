@@ -18,22 +18,30 @@ import stat
 import subprocess
 import tempfile
 import zipfile
+from datetime import timedelta
 from pathlib import Path
 from unittest import skipUnless
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.tasks import default_task_backend
 from django.test import override_settings, tag
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APITestCase, APITransactionTestCase
 
 from accounts.models import Role
 from projects.models import Project, ProjectMember
 
 from .models import AnalysisRun, AnalysisStatus
-from .services import fs_path, source_dir, workspace_dir
+from .services import (
+    STALE_RUN_MESSAGE, fs_path, mark_queued, reap_stale_runs, source_dir, workspace_dir,
+)
+from .tasks import run_analysis
 
 User = get_user_model()
 
@@ -470,7 +478,7 @@ class ExecuteStatusTests(AnalysisTestCase):
 
         response = self.client.post(execute_url(run_id))
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data['status'], AnalysisStatus.SUCCEEDED)
         run = AnalysisRun.objects.get(pk=run_id)
         self.assertEqual(len(run.raw_result['results']), 1)
@@ -486,7 +494,7 @@ class ExecuteStatusTests(AnalysisTestCase):
 
         response = self.client.post(execute_url(run_id))
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data['status'], AnalysisStatus.FAILED)
         run = AnalysisRun.objects.get(pk=run_id)
         self.assertIn('config error', run.error_message)
@@ -499,7 +507,7 @@ class ExecuteStatusTests(AnalysisTestCase):
 
         response = self.client.post(execute_url(run_id))
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data['status'], AnalysisStatus.FAILED)
         self.assertIn('초과', AnalysisRun.objects.get(pk=run_id).error_message)
 
@@ -511,7 +519,7 @@ class ExecuteStatusTests(AnalysisTestCase):
         mock_run.return_value.stderr = ''
 
         first = self.client.post(execute_url(run_id))
-        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(first.status_code, status.HTTP_202_ACCEPTED)
 
         second = self.client.post(execute_url(run_id))
         self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
@@ -530,7 +538,7 @@ class ExecuteStatusTests(AnalysisTestCase):
 
         response = self.client.post(execute_url(run_id))
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data['status'], AnalysisStatus.SUCCEEDED)
         run = AnalysisRun.objects.get(pk=run_id)
         self.assertEqual(run.raw_result['errors'][0]['message'], 'parse error: `` at 1:1')
@@ -543,7 +551,7 @@ class ExecuteStatusTests(AnalysisTestCase):
 
         response = self.client.post(execute_url(run_id))
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data['status'], AnalysisStatus.FAILED)
         run = AnalysisRun.objects.get(pk=run_id)
         self.assertIn('분석 가능한 소스 파일이 없습니다', run.error_message)
@@ -577,7 +585,7 @@ class ExecuteStatusTests(AnalysisTestCase):
 
         response = self.client.post(execute_url(run_id))
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data['status'], AnalysisStatus.SUCCEEDED)
         mock_run.assert_called_once()
 
@@ -587,7 +595,7 @@ class ExecuteStatusTests(AnalysisTestCase):
 
         response = self.client.post(execute_url(run_id))
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data['status'], AnalysisStatus.FAILED)
         self.assertIn(
             '분석 가능한 소스 파일이 없습니다',
@@ -608,7 +616,7 @@ class ExecuteStatusTests(AnalysisTestCase):
         mock_run.return_value.stderr = ''
         retry = self.client.post(execute_url(run_id))
 
-        self.assertEqual(retry.status_code, status.HTTP_200_OK)
+        self.assertEqual(retry.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(retry.data['status'], AnalysisStatus.SUCCEEDED)
 
 
@@ -856,3 +864,248 @@ class RunOrderingAndSequenceTests(AnalysisTestCase):
         self.assertEqual(detail['project_name'], self.project_a.name)
         rows = self.client.get(list_url(self.project_a.pk)).data
         self.assertEqual(rows[0]['project_name'], self.project_a.name)
+
+
+# ---------------------------------------------------------------------------
+# 백그라운드 큐 (SFR-008~009, SFR-015, SEC-009 — docs/decisions.md 2026-09-06)
+# ---------------------------------------------------------------------------
+
+DUMMY_TASKS = {'default': {'BACKEND': 'django.tasks.backends.dummy.DummyBackend', 'QUEUES': ['default']}}
+DATABASE_TASKS = {'default': {'BACKEND': 'django_tasks_db.DatabaseBackend', 'QUEUES': ['default']}}
+
+
+def _succeeding_semgrep(mock_run, results=None):
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = json.dumps({'results': results or [], 'errors': []})
+    mock_run.return_value.stderr = ''
+
+
+@override_settings(TASKS=DUMMY_TASKS)
+class QueueEnqueueTests(AnalysisTestCase):
+    """실행 요청은 큐에 등록만 하고 즉시 응답한다. DummyBackend는 작업을 실행하지 않고 보관만
+    하므로 "등록됐는가"를 정확히 볼 수 있다(테스트 기본인 immediate는 등록 즉시 실행)."""
+
+    def setUp(self):
+        super().setUp()
+        default_task_backend.clear()
+        self.login(self.admin)
+        response = self.client.post(
+            list_url(self.project_a.pk),
+            {'file': upload_file(entries={'app.py': 'eval(input())\n'})},
+            format='multipart',
+        )
+        self.run_id = response.data['id']
+
+    @patch('analysis.services.subprocess.run')
+    def test_execute_enqueues_and_returns_queued(self, mock_run):
+        response = self.client.post(execute_url(self.run_id))
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(response.data['status'], AnalysisStatus.QUEUED)
+        self.assertIsNotNone(response.data['queued_at'])
+        self.assertIsNone(response.data['started_at'])
+        queued = default_task_backend.results
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(list(queued[0].args), [self.run_id])
+        self.assertEqual(queued[0].task.module_path, 'analysis.tasks.run_analysis')
+        mock_run.assert_not_called()  # 실행은 워커의 몫 — 요청 안에서 Semgrep을 돌리지 않는다
+
+    def test_second_execute_while_queued_is_rejected_and_not_enqueued_twice(self):
+        first = self.client.post(execute_url(self.run_id))
+        second = self.client.post(execute_url(self.run_id))
+
+        self.assertEqual(first.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(len(default_task_backend.results), 1)
+
+    def test_failed_run_can_be_requeued(self):
+        AnalysisRun.objects.filter(pk=self.run_id).update(status=AnalysisStatus.FAILED)
+
+        response = self.client.post(execute_url(self.run_id))
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(response.data['status'], AnalysisStatus.QUEUED)
+
+    def test_enqueue_failure_reverts_run_to_pending(self):
+        # 큐 등록(INSERT)이 실패하면 "작업 없는 QUEUED"가 남아 복구 경로가 사라진다 —
+        # PENDING으로 되돌려 실행 버튼이 다시 보이게 한다.
+        with patch('analysis.views.run_analysis') as mocked_task:
+            mocked_task.enqueue.side_effect = RuntimeError('queue down')
+            with self.assertRaises(RuntimeError):
+                self.client.post(execute_url(self.run_id))
+
+        run = AnalysisRun.objects.get(pk=self.run_id)
+        self.assertEqual(run.status, AnalysisStatus.PENDING)
+        self.assertIsNone(run.queued_at)
+
+
+class RunAnalysisTaskTests(AnalysisTestCase):
+    """워커가 실행하는 작업 함수 자체. 큐 백엔드와 무관하게 직접 호출한다."""
+
+    def _queued_run(self, entries=None):
+        self.login(self.admin)
+        response = self.client.post(
+            list_url(self.project_a.pk),
+            {'file': upload_file(entries=entries or {'app.py': 'eval(input())\n'})},
+            format='multipart',
+        )
+        run = AnalysisRun.objects.get(pk=response.data['id'])
+        self.assertTrue(mark_queued(run))
+        return run
+
+    @patch('analysis.services.subprocess.run')
+    def test_task_runs_queued_run_to_completion(self, mock_run):
+        run = self._queued_run()
+        _succeeding_semgrep(mock_run, results=[{'check_id': 'x'}])
+
+        run_analysis.call(run.pk)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED)
+        self.assertIsNotNone(run.started_at)
+        self.assertIsNotNone(run.finished_at)
+        self.assertEqual(run.raw_result['results'], [{'check_id': 'x'}])
+        mock_run.assert_called_once()
+
+    @patch('analysis.services.subprocess.run')
+    def test_duplicate_delivery_does_not_run_semgrep_again(self, mock_run):
+        # 큐는 최소 한 번 전달이다 — 같은 작업이 두 번 오면 두 번째는 QUEUED→RUNNING 조건부
+        # UPDATE가 0행이라 아무것도 하지 않는다 (services.start_run).
+        run = self._queued_run()
+        _succeeding_semgrep(mock_run)
+        run_analysis.call(run.pk)
+        finished_at = AnalysisRun.objects.get(pk=run.pk).finished_at
+
+        run_analysis.call(run.pk)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED)
+        self.assertEqual(run.finished_at, finished_at)
+        self.assertEqual(mock_run.call_count, 1)
+
+    @patch('analysis.services.subprocess.run')
+    def test_task_on_run_that_is_not_queued_is_a_no_op(self, mock_run):
+        run = self._queued_run()
+        AnalysisRun.objects.filter(pk=run.pk).update(status=AnalysisStatus.PENDING)
+
+        run_analysis.call(run.pk)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.PENDING)
+        mock_run.assert_not_called()
+
+    @patch('analysis.services.subprocess.run')
+    def test_task_for_deleted_run_is_ignored(self, mock_run):
+        run_analysis.call(self.missing_project_id)  # 존재하지 않는 pk — 예외 없이 끝난다
+        mock_run.assert_not_called()
+
+    def test_unexpected_exception_marks_failed_and_reraises(self):
+        # run_semgrep이 스스로 처리하지 못한 예외는 RUNNING 고착 대신 FAILED로 남기고,
+        # 큐 쪽 작업 행에도 traceback이 기록되도록 다시 올린다.
+        run = self._queued_run()
+        with patch('analysis.tasks.run_semgrep', side_effect=RuntimeError('disk gone')):
+            with self.assertRaises(RuntimeError):
+                run_analysis.call(run.pk)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.FAILED)
+        self.assertIn('RuntimeError', run.error_message)
+        self.assertIn('disk gone', run.error_message)
+        self.assertIsNotNone(run.finished_at)
+
+
+class StaleRunReapTests(AnalysisTestCase):
+    """워커가 작업 중 죽어 RUNNING에 남은 실행 정리 (services.reap_stale_runs)."""
+
+    def _run(self, status_value, started_ago=None, queued_ago=None):
+        now = timezone.now()
+        return AnalysisRun.objects.create(
+            project=self.project_a, created_by=self.admin, original_filename='x.zip',
+            status=status_value,
+            started_at=now - started_ago if started_ago else None,
+            queued_at=now - queued_ago if queued_ago else None,
+        )
+
+    def _beyond_threshold(self):
+        return timedelta(
+            seconds=settings.ANALYSIS_SEMGREP_TIMEOUT + settings.ANALYSIS_STALE_RUN_GRACE + 60
+        )
+
+    def test_reaps_running_older_than_timeout_plus_grace(self):
+        stale = self._run(AnalysisStatus.RUNNING, started_ago=self._beyond_threshold())
+
+        self.assertEqual(reap_stale_runs(), 1)
+
+        stale.refresh_from_db()
+        self.assertEqual(stale.status, AnalysisStatus.FAILED)
+        self.assertEqual(stale.error_message, STALE_RUN_MESSAGE)
+        self.assertIsNotNone(stale.finished_at)
+
+    def test_keeps_recent_running_and_long_queued(self):
+        # 최근 RUNNING은 정상 실행 중일 수 있고, QUEUED는 워커 1개에 밀린 정상 대기일 수 있다.
+        recent = self._run(AnalysisStatus.RUNNING, started_ago=timedelta(seconds=10))
+        waiting = self._run(AnalysisStatus.QUEUED, queued_ago=self._beyond_threshold())
+
+        self.assertEqual(reap_stale_runs(), 0)
+
+        recent.refresh_from_db()
+        waiting.refresh_from_db()
+        self.assertEqual(recent.status, AnalysisStatus.RUNNING)
+        self.assertEqual(waiting.status, AnalysisStatus.QUEUED)
+
+    def test_reap_is_idempotent(self):
+        self._run(AnalysisStatus.RUNNING, started_ago=self._beyond_threshold())
+        reap_stale_runs()
+        self.assertEqual(reap_stale_runs(), 0)
+
+
+@override_settings(TASKS=DATABASE_TASKS)
+class WorkerCommandTests(APITransactionTestCase):
+    """실제 DB 큐 백엔드로 한 바퀴 — 등록된 작업을 analysis_worker가 집어 가고, 시작 시 고착된
+    실행을 먼저 정리한다. 워커 루프가 연결 정리(close_old_connections)를 하므로 TestCase의
+    트랜잭션 안에서는 돌 수 없어 TransactionTestCase를 쓴다."""
+
+    def setUp(self):
+        super().setUp()
+        tmp_root = Path(tempfile.mkdtemp(prefix='analysis-worker-tests-'))
+        self.addCleanup(shutil.rmtree, tmp_root, ignore_errors=True)
+        overridden = override_settings(ANALYSIS_WORKSPACE_ROOT=tmp_root)
+        overridden.enable()
+        self.addCleanup(overridden.disable)
+        self.admin = User.objects.create_user(
+            email='admin@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        self.project = Project.objects.create(name='p', created_by=self.admin)
+        self.client.force_authenticate(user=self.admin)
+
+    def _upload(self):
+        response = self.client.post(
+            list_url(self.project.pk),
+            {'file': upload_file(entries={'app.py': 'eval(input())\n'})},
+            format='multipart',
+        )
+        return AnalysisRun.objects.get(pk=response.data['id'])
+
+    @patch('analysis.services.subprocess.run')
+    def test_worker_reaps_stale_run_then_processes_queued_work(self, mock_run):
+        stale = AnalysisRun.objects.create(
+            project=self.project, created_by=self.admin, original_filename='old.zip',
+            status=AnalysisStatus.RUNNING,
+            started_at=timezone.now() - timedelta(days=1),
+        )
+        run = self._upload()
+        _succeeding_semgrep(mock_run)
+
+        response = self.client.post(execute_url(run.pk))
+        self.assertEqual(response.data['status'], AnalysisStatus.QUEUED)  # 워커 전이라 대기열
+
+        call_command(
+            'analysis_worker', '--batch', '--no-startup-delay', '--no-reload', '--interval', '0.1',
+        )
+
+        run.refresh_from_db()
+        stale.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED)
+        self.assertEqual(stale.status, AnalysisStatus.FAILED)
+        self.assertEqual(stale.error_message, STALE_RUN_MESSAGE)
+        mock_run.assert_called_once()
