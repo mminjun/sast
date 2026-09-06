@@ -542,5 +542,15 @@
   보고 패스는 다른 메서드에서 대입된 필드만, role `field`(대입 메서드 이름, 소스와 같은 줄이면 force), paths_count에
   대입 메서드 수 반영, 화면 `대입 (load)` 라벨. 샘플 `taint_class_vulnerable.py`(7건)/`taint_class_safe.py`. 실측
   N=5·M=1, `ClassFieldTests`가 고정. 잡은 것: 2단계 `_longer`의 None 결함(요약 키 소실), 필드 이름 `name`이 IV-03
-  속성 sanitizer에 걸리는 알려진 미탐(샘플 이름 변경·기록). 성능: 저장소 1.0초·zip 0.2초·Django 약 8초. 테스트 신규
-  15(클래스 12·catalog 3), Semgrep 한계 표를 "넘은 것/남은 것"으로 갱신
+  속성 sanitizer에 걸리는 알려진 미탐(샘플 이름 변경·기록). 성능: 저장소 1.8초·zip 0.3초·Django 16초(클래스 패스
+  최대 7). 테스트 신규 15(클래스 12·catalog 3), Semgrep 한계 표를 "넘은 것/남은 것"으로 갱신. PR #14 게이트 통과
+- 도그푸딩(run 60, 191파일): 자체 엔진이 Semgrep이 못 잡는 걸 실코드에서 잡은 첫 사례 — `analysis/taint/engine.py:65`
+  `read_text`(매개변수 `root`가 `sorted(p for p in root.rglob(...))` 컴프리헨션을 거쳐 싱크, custom_only 1). 판정은
+  기존 IV-03 10건과 같은 "매개변수 소스의 구조적 오탐"(호출자가 격리 검사 후 넘김). 같은 회차에서 새 시험 코드의
+  IV-03 4건(`tests.py`의 `SAMPLES_DIR / name`·`self.root / rel`)도 같은 사유로 판정, 기존 10건은 승계됨. 반대 방향도
+  드러남: semgrep_only 5(전부 `catalog/tests.py`의 `(SAMPLES_DIR / name).read_text(...)`) — 수신자가 괄호 식(BinOp)이면
+  `dotted()`가 이름을 못 만들어 `$P.read_text` 싱크를 못 붙이는 1단계부터의 한계(main 사본으로 확인, 3단계 회귀 아님).
+  변수에 담으면(`p = A / name; p.read_text()`) 잡힘. 후속 후보로 남김
+- semgrep_only가 회귀 감지 장치로 실제 작동한 첫 사례: 1단계에서 "동등성 확인 후에는 이 숫자가 0으로 유지되는지가
+  감지 장치"로 넣어 둔 통계가 3단계 도그푸딩에서 실코드의 엔진 한계(괄호 식 수신자)를 드러냈다. 샘플·시험이 아니라
+  실제 저장소 코드에서 두 엔진의 차이가 숫자로 잡힌 것 — 앞으로도 도그푸딩 회차마다 이 값을 본다
