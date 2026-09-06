@@ -89,8 +89,12 @@
 | CI 게이트 (9/4) | PR마다 base·head를 우리 룰셋으로 스캔해 서버와 같은 핑거프린트로 신규/해결/유지 분류, job summary·PR 코멘트 요약, 신규 HIGH면 실패. 조각 읽기를 `catalog/snippet.py`로 분리해 서버와 공유 | `.github/workflows/sast-scan.yml`, `scripts/sast_gate.py`, `catalog/snippet.py` |
 | 오탐 관리 (9/5) | Finding 판정(미처리/오탐/수용)+사유·판정자·일시, 직전 완료 실행 승계(같은 run 판정 우선, 재표준화 보존), 관리자 PATCH+접근 로그, 목록 status 필터, diff·변화량 오탐 제외(`false_positive` 키)·수용 포함, 결과 화면 판정 칩·편집기, 비교 페이지 안내 | catalog(models 0004, services `_carry_over_status`·`previous_succeeded_run`, `PATCH /api/findings/{id}/status/`), frontend `RunDetailPage`·`ComparePage` |
 | 분석 제외 경로 (9/5) | Project.exclude_paths(JSON 배열, 관리자만 수정) → 실행 시 Semgrep `--exclude` 인자. CI 워크플로 제외 목록과 같은 개념(오탐=잘못 잡은 것, 제외=검사할 이유가 없는 것). 항목 검증(`..`·절대 경로·역슬래시 거부, 50개·200자), 제외 후 대상 0개면 실패 메시지로 구분, 상세 화면 편집·표시 | projects(models 0003, `exclude_paths.py`, serializers), analysis/services `run_semgrep`·`_scan_target_presence`, frontend `ProjectDetailPage` |
+| 테스트 실행 시간 (9/6) | 실제 Semgrep을 도는 시험에 `@tag('semgrep')`(22개) → 평소 `--exclude-tag=semgrep` 약 1분, 테스트 전용 MD5 해셔, `--parallel 4` | config/settings.py(테스트 판별), catalog/analysis tests |
+| 분석 실행 백그라운드 큐 (9/6) | Django 6.1 `django.tasks` + `django-tasks-db`(PostgreSQL 테이블, Redis 없음). QUEUED 상태·조건부 UPDATE로 중복 실행 방지, 워커 시작 시 고착 RUNNING 자동 정리, 화면 3초 폴링·5분 힌트. Celery·RQ·huey·django-q2 비교 후 채택 | analysis/tasks.py, analysis/management/commands/analysis_worker.py, reap_stale_runs.py |
+| Semgrep taint 룰 (9/6) | Python 인젝션 7항목(IV-01·02·03·04·05·07·12)을 패턴 룰에서 taint 모드로 교체 — 상수만 흐르면 안 잡고 선언한 검증(정규식·allowlist·타입 변환·이스케이프)은 깨끗. 텍스트 출력에서 오염 경로를 읽어 결과에 붙임, 엔진 표시 | catalog/rules/taint_python.yaml, analysis/semgrep_trace.py, frontend `RunDetailPage` |
+| 자체 taint 엔진 (9/6, 3단계) | Django 없는 `ast` 기반 엔진. 1단계 함수 내(Semgrep과 동등성 both 15/semgrep_only 0), 2단계 같은 파일 함수 간(함수 요약 고정점, N=4/M=5), 3단계 클래스 필드 경유(흐름 비민감, N=5/M=1). Semgrep 결과와 (항목·파일·줄) 병합, `custom_taint_stats.semgrep_only`가 회귀 감지 장치, `.env`로 on/off·시간 예산 | analysis/taint/ (spec·state·python_analyzer·engine·report), catalog/services.py `_merge_engines`, 샘플 `taint_inter_*`·`taint_class_*` |
 
-## 현황 요약 (2026-09-02 기준)
+## 현황 요약 (2026-09-07 기준)
 
 - SFR 17개: 완료 17 (SFR-011은 9/5 Java·JS 룰로 4개 언어가 되어 완료 판정 — decisions.md)
 - DAR 10개: 완료 10 (DAR-008은 9/2 판정 조정 — decisions.md)
@@ -98,7 +102,12 @@
 - TST 8개: 완료 8
 - QLT 5개: 완료 5
 - **합계: 50개 중 완료 50** (9/2 판정 조정으로 47→49, DAR-008·SFR-010; 9/5 SFR-011 완료로 50 — decisions.md)
-- 테스트: **269개 전부 통과** (accounts 56 · projects 33 · analysis 42 · catalog 125 · scripts 13 — 9/4 기준)
+- RFP 외 자체 개선 15항목(위 표): 접근 로그·핑거프린트·diff·비교 화면·대시보드·CI 게이트·오탐 관리·제외 경로·
+  테스트 태그·백그라운드 큐·Semgrep taint 룰·자체 taint 엔진 3단계 등
+- 룰: 100개(Python 22·C 13·Java 35·JS/TS 30), 49개 기준 중 39개 실탐지
+- 테스트: **430개 전부 통과** (accounts 56 · projects 51 · analysis 121 · catalog 189 · scripts 13 — 9/7 기준,
+  실제 Semgrep을 도는 시험 22개는 `@tag('semgrep')`)
 - 프론트엔드: 7화면 완결 — 로그인 / 프로젝트 목록 / 프로젝트 상세(대시보드 포함) /
-  실행 결과 상세 / 실행 비교 / 카탈로그 / 사용자 관리. 관리자·일반 계정 브라우저 E2E로
+  실행 결과 상세(코드 조각·오염 경로·판정) / 실행 비교 / 카탈로그 / 사용자 관리. 관리자·일반 계정 브라우저 E2E로
   권한 격리 실증(각 행의 8/28 표기), diff 시연은 demo-app v1~v3로 실서버 검증(9/2)
+- 도그푸딩: 자체 저장소를 프로젝트 #17에서 10회차 분석(run 18~60). 스크린샷·현재 수치는 README

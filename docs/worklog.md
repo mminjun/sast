@@ -447,6 +447,8 @@
   커밋 이력 없음 확인(`git log -- .env` 빈 결과). `scripts/make_selfscan_zip.py` 추가 — git 추적
   파일만 + DENY 이름 재검사, 실행 결과 170개 파일·`.env.example`만 포함. decisions에 8/27
   `.gitignore` 사고와 9/6 `--project-root` 사고를 "작업 영역이 저장소 내부" 계열로 묶어 기록
+## 2026-09-06
+
 - 테스트 실행 시간(feature/test-tags): 실제 Semgrep 시험 13개에 `@tag('semgrep')`(catalog
   DetectionSampleTests·analysis 실제 제외 실증) → `--exclude-tag=semgrep`으로 평소엔 건너뜀. 그래도
   313개가 405초라 실측: bcrypt 0.31초/해시 × 시험당 사용자 2~3명 = 대부분. 테스트 실행 중에만
@@ -544,6 +546,8 @@
   N=5·M=1, `ClassFieldTests`가 고정. 잡은 것: 2단계 `_longer`의 None 결함(요약 키 소실), 필드 이름 `name`이 IV-03
   속성 sanitizer에 걸리는 알려진 미탐(샘플 이름 변경·기록). 성능: 저장소 1.8초·zip 0.3초·Django 16초(클래스 패스
   최대 7). 테스트 신규 15(클래스 12·catalog 3), Semgrep 한계 표를 "넘은 것/남은 것"으로 갱신. PR #14 게이트 통과
+## 2026-09-07
+
 - 도그푸딩(run 60, 191파일): 자체 엔진이 Semgrep이 못 잡는 걸 실코드에서 잡은 첫 사례 — `analysis/taint/engine.py:65`
   `read_text`(매개변수 `root`가 `sorted(p for p in root.rglob(...))` 컴프리헨션을 거쳐 싱크, custom_only 1). 판정은
   기존 IV-03 10건과 같은 "매개변수 소스의 구조적 오탐"(호출자가 격리 검사 후 넘김). 같은 회차에서 새 시험 코드의
@@ -554,3 +558,12 @@
 - semgrep_only가 회귀 감지 장치로 실제 작동한 첫 사례: 1단계에서 "동등성 확인 후에는 이 숫자가 0으로 유지되는지가
   감지 장치"로 넣어 둔 통계가 3단계 도그푸딩에서 실코드의 엔진 한계(괄호 식 수신자)를 드러냈다. 샘플·시험이 아니라
   실제 저장소 코드에서 두 엔진의 차이가 숫자로 잡힌 것 — 앞으로도 도그푸딩 회차마다 이 값을 본다
+- 문서 정리(feature/docs): 조사(README 195줄에 구조 없음·설치 절차가 60%, decisions 21절 199건, worklog 9/6·9/7
+  헤더 누락, requirements-map 현황 9/2 기준, self-scan 8/28 기준, 룰 100·실탐지 39·테스트 430·화면 7·엔드포인트 19)
+  → README를 방문자용 입구로 재작성(소개+배지, 실행 상세 오염 경로 스크린샷, 하는 일 5절, Semgrep OSS 대비
+  넘은 것/남은 것 표, 설계 판단 5가지, 숫자 표, 개발 방식(Claude Code·CLAUDE.md·decisions·게이트), setup 링크),
+  설치 절차는 `docs/setup.md`로 이동(첫 분석·테스트·게이트 재현·도그푸딩 zip 포함). 스크린샷 5장 `docs/images/`
+  (실행 상세 taint 경로 — 새 프로젝트 "taint 샘플 시연" run 61, 대시보드 — 도그푸딩 10회차, 비교 — demo-board
+  #1→#2 신규3/해결5/유지9, 카탈로그, PR #14 게이트 통과 코멘트; 계정 이메일은 가림). worklog 날짜 헤더 복원,
+  requirements-map 현황 갱신·자체 개선 표에 큐·taint 룰·자체 엔진·테스트 태그 추가, self-scan 머리에 시점 안내
+  한 줄, decisions 앞에 절 목차. Docker 한 줄 실행은 다음 PR

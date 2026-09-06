@@ -1,195 +1,137 @@
 # SAST — KISA 개발보안 가이드 기반 정적 분석 웹 시스템
 
-소스코드(zip)를 업로드하면 Semgrep으로 정적 분석해 KISA 소프트웨어 개발보안 가이드
-49개 진단 기준에 매핑된 취약점을 대시보드로 보여주는 웹 시스템입니다.
+[![SAST gate](https://github.com/mminjun/sast/actions/workflows/sast-scan.yml/badge.svg?event=pull_request)](https://github.com/mminjun/sast/actions/workflows/sast-scan.yml)
 
-- 백엔드: Django + Django REST Framework (JWT 인증)
-- 프론트엔드: React + Vite (`frontend/`)
-- DB: PostgreSQL (docker-compose)
-- 분석 엔진: Semgrep (자체 룰 `catalog/rules/*.yaml`만 사용)
-- 분석 대상 언어: Python(`.py`, 룰 21개), C(`.c`/`.h`, 13개), Java(`.java`, 35개),
-  JavaScript/TypeScript(`.js`/`.jsx`/`.ts`/`.tsx`, 30개). 언어별 룰은 `c_*`/`java_*`/`js_*.yaml`.
-  49개 기준 중 39개가 실탐지이며, 같은 항목을 여러 언어 룰이 각각 잡는다
-- 오탐 관리: 결과마다 판정(미처리/오탐/수용)을 관리자가 표시하면 다음 회차의 같은 결과에
-  자동 승계되고, 실행 간 비교에서 오탐은 제외됩니다
-- 흐름 추적(taint): Python 인젝션 계열 7항목(SQL·코드·OS 명령·경로·XSS·리다이렉트·SSRF)은
-  Semgrep taint 모드(`catalog/rules/taint_python.yaml`)로 "외부 입력이 변수를 거쳐 위험한 지점까지
-  흘러가는가"를 봅니다. 상수만 흐르면 잡지 않고, 검증(정규식·allowlist·타입 변환·이스케이프)을
-  거친 값은 깨끗한 것으로 봅니다. 결과에는 엔진(`taint` 태그)과 소스→경유→싱크 오염 경로가
-  붙습니다. Semgrep 무료 엔진은 함수·파일 간 추적을 하지 않습니다(`docs/decisions.md` 9/6 taint)
-- 자체 taint 엔진(`analysis/taint`, Python): Semgrep 다음에 같은 워커 작업에서 돌며 같은 항목을 `ast`
-  기반으로 추적합니다. 결과는 Semgrep과 (항목·파일·싱크 줄)로 병합되고, 실행 상세의 `custom_taint_stats`에서
-  "Semgrep만 잡은 건수(semgrep_only)"가 0인지로 두 엔진의 동등성을 확인할 수 있습니다. 함수 내(1단계)와 같은
-  파일 안 함수 간(2단계 — 함수 요약을 고정점까지 계산해 이름 규약이 거짓말하는 헬퍼, 헬퍼 안 입력이 반환되는
-  경우를 잡고, 본문이 씻는 헬퍼의 Semgrep 오탐을 없앰), 클래스 필드 경유(3단계 — 한 메서드에서 `self.f`에 넣고
-  다른 메서드에서 싱크에 쓰는 흐름, `__init__` 인자·필드 체인 포함, 호출 순서는 보지 않음)까지 구현했습니다. 오염
-  경로에는 호출/진입/반환/대입(메서드 이름) 노드가 붙습니다. 파일 간(import) 추적은 하지 않습니다. `.env`의
-  `ANALYSIS_CUSTOM_TAINT_ENABLED`로 끕니다
+소스코드 zip을 올리면 KISA 소프트웨어 개발보안 가이드 **49개 진단 기준**으로 정적 분석하고, 결과를 프로젝트
+안에 회차로 쌓아 **이전 실행과 비교**하는 웹 시스템입니다. 엔진은 Semgrep 위에 자체 룰 100개(4개 언어)를 얹었고,
+Semgrep 무료 엔진이 못 하는 **함수 간·클래스 필드 경유 흐름 추적**은 1,100줄짜리 자체 taint 엔진이 맡습니다.
+Django + DRF / React / PostgreSQL. 2026-08-25부터 2주 동안 만들었습니다.
 
-## 실행 방법 (Getting Started)
+![실행 상세 — 오염 경로: 소스(request.GET) → 대입(load 메서드의 self.host) → 진입(run) → 싱크(os.system)](docs/images/run-detail-taint-trace.png)
 
-### 사전 준비물
+*실행 상세 화면. 한 메서드에서 `self.host`에 넣은 입력이 다른 메서드의 `os.system`까지 흐른 경로를 보여준다 —
+Semgrep OSS는 이 케이스를 잡지 못한다.*
 
-- Python 3.13
-- Node.js 20 이상 (개발은 v24 기준)
-- Docker + Docker Compose (PostgreSQL 용)
+## 이 프로젝트가 하는 일
 
-### 1. 클론 및 파이썬 의존성 설치
+**진단** — Python·C·Java·JavaScript/TypeScript 룰 100개로 49개 기준 중 39개를 실탐지합니다. KISA 가이드에는
+심각도가 없어서 "성공하면 그 자체로 침해가 완성되는가"를 기준으로 높음 26 / 보통 20 / 낮음 3을 직접 부여했고,
+카탈로그 화면에서 항목별 구현 여부와 근거를 봅니다. Python 인젝션 7항목은 패턴이 아니라 taint(흐름) 룰이라
+상수만 흐르면 잡지 않고, 검증(정규식·allowlist·타입 변환)을 거친 값은 깨끗한 것으로 봅니다.
 
-```bash
-git clone <repo-url> sast
-cd sast
-python -m venv venv
-# Windows PowerShell
-.\venv\Scripts\Activate.ps1
-# macOS/Linux
-source venv/bin/activate
+![진단 기준 카탈로그 — 49개 중 39개 실탐지, 심각도 원칙](docs/images/catalog.jpg)
 
-pip install -r requirements.txt
-```
+**권한과 격리** — 관리자/일반 역할, 프로젝트별 사용자 할당. 할당되지 않은 프로젝트는 존재 자체가 드러나지
+않습니다(404로 통일). 업로드된 zip은 실행마다 격리된 디렉토리에서만 다루고, Zip Slip·심볼릭 링크·zip bomb을
+막습니다. 비밀번호는 bcrypt, 인증은 JWT(refresh rotation + blacklist).
 
-Semgrep CLI는 `requirements.txt`에 포함되어 있어 별도 설치가 필요 없습니다.
+**회차 비교와 오탐 관리** — 실행 이력이 프로젝트 안에 회차로 쌓이고, 결과마다 라인 번호를 뺀 핑거프린트를 붙여
+다음 회차와 **신규 / 해결 / 유지**로 짝지어 줍니다. 관리자가 오탐·수용으로 판정하면 다음 회차의 같은 결과에 자동
+승계되고 비교에서 빠집니다. 대시보드는 회차별 심각도 추이와 룰 상위를 보여줍니다.
 
-### 2. 환경변수 설정 (.env)
+![프로젝트 대시보드 — 회차별 심각도 추이, 직전 대비 신규/해결/유지](docs/images/project-dashboard.png)
 
-템플릿 `.env.example`을 복사해 `.env`를 만들고 값을 채웁니다.
-`.env`는 `.gitignore`로 커밋에서 제외됩니다.
+![분석 비교 — 신규 3 / 해결 5 / 유지 9](docs/images/run-compare.png)
 
-```bash
-# Windows PowerShell: Copy-Item .env.example .env
-cp .env.example .env
-```
+**자체 taint 엔진** — Semgrep OSS taint는 함수 안에서만 흐름을 봅니다. `analysis/taint`는 Python `ast`만으로
+같은 파일 안 함수 간(함수 요약을 고정점까지)과 클래스 필드 경유(한 메서드에서 `self.f = 입력`, 다른 메서드에서
+싱크)를 추적하고, 결과를 Semgrep과 (항목·파일·줄)로 병합합니다. "Semgrep만 잡은 건수"가 실행마다 기록되어 두
+엔진의 동등성이 깨지면 바로 드러납니다.
 
-필수 값 (없으면 서버가 기동 자체를 거부합니다 — fail-fast):
+**분석 큐와 CI 게이트** — 분석은 Django 6.1 내장 Tasks 큐(PostgreSQL 테이블)에 등록되고 워커가 처리합니다. PR마다
+GitHub Actions가 base와 head를 우리 룰셋으로 스캔해 서버와 같은 핑거프린트로 비교하고, **신규 HIGH가 1건이라도
+있으면 병합을 막습니다.** main은 이 체크를 필수로 요구하고, 게이트 도입(PR #3) 이후 병합된 PR 10개가 전부 통과했습니다.
 
-| 변수 | 설명 |
+<p>
+<img src="docs/images/ci-gate-passed.png" alt="SAST 게이트 통과 코멘트" width="49%">
+<img src="docs/images/ci-gate-blocked.png" alt="신규 HIGH로 차단된 PR" width="49%">
+</p>
+
+## Semgrep OSS 대비 — 넘은 것 / 남은 것
+
+Semgrep 1.175.0 OSS taint 모드를 직접 실측한 뒤(`docs/decisions.md` 2026-09-06 taint) 자체 엔진을 세 단계로
+만들었습니다. 각 단계의 성과는 취약/안전 샘플로 숫자를 고정해 테스트가 지킵니다 — **N** = 우리만 잡는 건수,
+**M** = Semgrep이 안전 샘플에서 내는 오탐 중 우리가 내지 않는 건수.
+
+| 흐름 | Semgrep OSS taint | 자체 엔진 | 실측 |
+|---|---|---|---|
+| 함수 안 변수·f-string·체인 전파, 선언한 sanitizer | 잡음 | 잡음 (1단계) | 동등성: `vulnerable.py` 15건 일치, 자체 저장소 6/6 |
+| 같은 파일 안 함수 간 (헬퍼로 넘긴 입력, 헬퍼가 반환한 입력) | **못 잡음** | 잡음 (2단계) | N = 4, M = 5 |
+| 본문이 씻는 헬퍼·메서드 (`my_escape(x)`, `self.quote(x)`) | 오탐 (이름 규약으로만 신뢰) | 본문을 보고 깨끗하게 판정 | M에 포함 |
+| 클래스 필드 경유 (`load()`에서 `self.q = 입력`, `run()`에서 싱크) | **못 잡음** | 잡음 (3단계, `__init__` 인자·필드 체인 포함) | N = 5, M = 1 |
+| 오염 경로 출력 | 텍스트만 (JSON·SARIF 없음) | 결과에 직접 (소스→호출/진입/반환/대입→싱크) | 화면 표시 |
+| 파일 간 (import 해석) | 못 잡음 | **범위 밖** | — |
+| 호출 순서·경로 민감도, 전역·클로저, 상속 | 못 잡음 | **범위 밖** (필드는 흐름 비민감) | Django 906파일 실측: 순서 오탐 0 |
+
+실코드에서도 확인했습니다 — 이 저장소를 자기 자신으로 분석한 회차에서 자체 엔진이 컴프리헨션을 거친 `read_text`
+1건을 Semgrep보다 더 잡았고, 반대로 괄호 식 수신자(`(A / name).read_text()`) 5건은 Semgrep만 잡아 알려진 한계로
+기록했습니다(`docs/worklog.md` 2026-09-07).
+
+## 설계에서 판단한 것 5가지
+
+기각한 대안과 실측 숫자까지 `docs/decisions.md`에 199건을 남겼습니다. 그중 이 제품의 모양을 정한 다섯 가지:
+
+1. **심각도는 "추가 조건 없이 침해가 완성되는가"로 3단계.** KISA는 유형만 분류하고 등급을 주지 않는다. 높음 =
+   원격 코드 실행·인증 우회·자격증명 직접 노출, 보통 = 사용자 상호작용·타이밍 같은 조건이 더 필요하거나 영향이
+   정찰·가용성에 그침, 낮음 = 단독으로는 공격 경로가 아님. 카탈로그에 없는 탐지는 Semgrep 등급, 그마저 없으면
+   누락 방지를 위해 보통. — decisions 2026-08-27 (catalog 앱)
+2. **미할당 프로젝트는 존재하지 않는 것으로 답한다.** 일반 사용자가 미할당·미존재 프로젝트를 읽으면 완전히
+   같은 404, 쓰기는 권한 검사가 객체 조회보다 먼저라 403. 할당을 해제하면 즉시 404가 되어 "있는데 못 보는"
+   상태를 남기지 않는다. — decisions 2026-08-27
+3. **핑거프린트에 라인 번호를 넣지 않는다.** sha256(룰 | 경로 | 공백 정규화한 코드 조각)에 같은 run 안 순번을
+   *항상* 붙인다. 라인을 넣으면 한 줄만 밀려도 전부 신규/해결이 되고, 순번을 중복일 때만 붙이면 중복이 2→1로
+   줄어드는 순간 생존자의 키가 바뀌어 건수 자체가 틀린다. 주변 줄을 해시에 넣는 안, 이전 실행을 참조하는 안은
+   기각. — decisions 2026-09-02
+4. **오탐 승계는 "같은 run의 판정(OPEN 포함) > 직전 실행의 비-OPEN 판정".** 재표준화는 결과를 지우고 다시 넣으므로
+   지우기 전에 판정을 핑거프린트별로 모아 두었다가 먼저 입힌다. OPEN까지 포함하는 이유는 관리자가 승계된 오탐을
+   되돌린 뒤 재표준화했을 때 되돌림이 조용히 취소되지 않게 하려는 것. 한 트랜잭션이라 멱등. — decisions
+   2026-09-05 (오탐 관리)
+5. **Celery + Redis를 쓰지 않는다.** 부하는 "관리자가 가끔 누르는 분석, 건당 수십 초~10분"이고 필요한 건
+   큐·워커·중복 방지·테스트용 동기 모드 넷뿐이다. Celery·RQ·huey·django-q2와 비교해 Django 6.1 내장
+   `django.tasks` + DB 백엔드를 택했다 — 새 패키지 1개, 새 서비스 0개, 테스트는 코어의 `ImmediateBackend`.
+   Celery가 필요해지면 바꿀 곳 세 군데를 적어 두었다. — decisions 2026-09-06 (백그라운드 큐)
+
+설계 단계의 우려가 실측으로 뒤집힌 사례도 두 번 있습니다 — 2단계 "요약 모양은 단조"라는 첫 주장이 거짓이었던
+것, 3단계 흐름 비민감의 오탐 비용이 Django 906파일에서 호출 순서 오탐 0으로 나온 것. 둘 다 decisions에 과정째
+남겼습니다.
+
+## 숫자로 보는 저장소 (2026-09-07)
+
+| 항목 | 값 |
 |---|---|
-| `POSTGRES_DB` / `POSTGRES_USER` | DB 이름·사용자 (기본 `sast`) |
-| `POSTGRES_PASSWORD` | DB 비밀번호. 생성: `python -c "import secrets; print(secrets.token_urlsafe(24))"` |
-| `POSTGRES_HOST` / `POSTGRES_PORT` | 기본 `127.0.0.1` / `5432` |
-| `DJANGO_SECRET_KEY` | 반드시 새로 생성. 생성: `python -c "from django.core.management.utils import get_random_secret_key as g; print(g())"` |
-| `DJANGO_DEBUG` | 기본 `False`. **로컬 개발에서는 `True`로 설정** |
-| `DJANGO_ALLOWED_HOSTS` | 기본 `127.0.0.1,localhost` |
+| KISA 진단 기준 | 49 등록, **39 실탐지** |
+| 룰 | **100** — Python 22 (taint 7 포함) · C 13 · Java 35 · JS/TS 30 |
+| 지원 확장자 | `.py` `.c` `.h` `.java` `.js` `.jsx` `.ts` `.tsx` |
+| 테스트 | **430** (accounts 56 · projects 51 · analysis 121 · catalog 189 · CI 게이트 13), 실제 Semgrep을 도는 시험 22 |
+| 화면 | 7 — 로그인 · 프로젝트 목록 · 프로젝트 상세(대시보드) · 실행 상세 · 분석 비교 · 진단 기준 · 사용자 관리 |
+| API | 19 엔드포인트, Django 앱 4개 (accounts · projects · analysis · catalog) |
+| 코드 | 백엔드 약 7,000줄 (테스트 6,000줄 별도) · 자체 taint 엔진 1,120줄 · 프론트 3,400줄 · 룰 YAML 2,700줄 |
+| 기록 | 결정 199건 · 요구사항 50/50 · 병합 PR 13 |
 
-### 3. PostgreSQL 기동 (docker-compose)
+## 개발 방식
 
-```bash
-docker compose up -d db
-```
+이 프로젝트는 **Claude Code와 함께** 만들었습니다. 숨길 일이 아니고, 통제한 방식 자체가 보여줄 거리라고 생각합니다.
 
-`.env`의 `POSTGRES_*` 값을 컨테이너와 Django가 공유합니다.
-DB 포트는 `127.0.0.1`에만 바인딩됩니다 (외부 노출 없음).
+- **규칙은 `CLAUDE.md`에.** 보안 규칙(bcrypt, IDOR 재검증, Zip Slip, 실행별 격리, 존재 은닉, 시크릿 금지)과
+  작업 방식(큰 작업은 Plan Mode로 설계부터, 한 번에 한 기능, 새 의존성은 승인, 요구사항 번호를 커밋에)이 적혀
+  있고 매 세션 이 파일을 먼저 읽습니다.
+- **기능 하나 = 브랜치 하나.** 설계 판단을 먼저 제시하고 승인받은 뒤 구현 → 테스트 → PR → SAST 게이트 → 병합.
+  룰은 스크래치에서 취약/안전 샘플로 정탐·오탐을 실측한 뒤에야 저장소로 옮기고, 기대 건수를 테스트가 고정합니다.
+- **결정은 근거와 함께.** `docs/decisions.md`에 채택한 것뿐 아니라 기각한 대안, 실측 숫자, 사고(`.env`가 zip에
+  섞인 일, `--project-root` 누락)와 재발 방지를 남깁니다. 요구사항 50개는 `docs/requirements-map.md`가 구현
+  위치까지 추적하고, `docs/worklog.md`가 일자별 기록입니다.
+- **자기 코드를 자기 도구로.** 이 저장소를 도그푸딩 프로젝트로 10회 분석했습니다. 오탐 관리, 분석 제외 경로,
+  `.env` 사고 처리, 자체 엔진의 결함 둘(헤더 식 호출 누락, 요약 키 소실)이 전부 여기서 나왔습니다.
 
-### 4. 마이그레이션
+## 실행 방법
 
-```bash
-python manage.py migrate
-```
-
-### 5. KISA 진단 기준 49개 시드
-
-```bash
-python manage.py seed_catalog
-```
-
-`catalog/data/kisa_rules.json`(49개 항목)과 `catalog/rules/*.yaml`(Semgrep 룰↔항목
-매핑)을 읽어 카탈로그를 등록·갱신합니다. 멱등이라 재실행해도 안전하며,
-`--dry-run` 옵션으로 DB를 건드리지 않고 검증만 할 수 있습니다.
-
-### 6. 관리자 계정 생성
-
-```bash
-python manage.py createsuperuser
-```
-
-이메일·비밀번호를 물어봅니다 (username 없음 — 이메일 로그인). 이렇게 만든 계정은
-자동으로 `ADMIN` 역할이 부여되어, 웹 UI에서 사용자 관리(계정 생성·비활성화 등)를
-할 수 있습니다. 일반 사용자 계정은 이 admin 계정으로 로그인한 뒤 UI에서 만듭니다.
-
-### 7. 백엔드 기동
-
-```bash
-python manage.py runserver
-```
-
-API 서버가 `http://127.0.0.1:8000`에서 뜹니다. 프론트 dev 서버가 `/api` 요청을
-여기로 프록시하므로 **백엔드를 먼저 띄운 상태**에서 프론트를 실행합니다.
-
-### 7-1. 분석 워커 기동
-
-새 터미널에서 (venv 활성화 — 워커가 Semgrep을 실행하므로 `semgrep`이 PATH에 있어야 합니다):
-
-```bash
-python manage.py analysis_worker
-```
-
-분석 실행 요청은 큐에 등록만 하고(상태 `대기열`) 이 워커가 순서대로 처리합니다. 큐는
-PostgreSQL 테이블(`django-tasks-db`)이라 Redis 같은 별도 서비스는 없습니다. **워커를 띄우지
-않으면 실행이 대기열에 머물고**, 5분이 지나면 화면이 "워커가 실행 중인지 확인하세요"라고
-알립니다. `DJANGO_DEBUG=True`면 워커도 코드 변경 시 자동 재시작됩니다.
-
-- **동시 실행 수 = 워커 프로세스 수.** 한 워커는 한 번에 한 건만 처리합니다. Semgrep이
-  코어를 전부 쓰므로 노트북은 1개, 서버는 코어 수를 보고 2~3개
-  (`--worker-id`를 서로 다르게 주어 여러 개 실행).
-- 워커가 작업 도중 종료되면 그 실행은 `실행중`에 남는데, 워커를 다시 시작하면 시작 시
-  자동으로 `실패`("워커가 중단되어…")로 정리되어 재실행할 수 있습니다
-  (`python manage.py reap_stale_runs`로 수동 정리도 가능).
-- 워커 없이 요청 안에서 동기 실행하려면 `.env`에 `ANALYSIS_TASK_BACKEND=immediate`
-  (큐 도입 전과 같은 동작, 테스트가 이 모드로 돕니다).
-
-### 8. 프론트엔드 기동
-
-새 터미널에서:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-브라우저에서 `http://localhost:5173` 접속 → 6번에서 만든 admin 이메일/비밀번호로
-로그인합니다.
-
-### 요약 (전체 순서)
-
-```bash
-pip install -r requirements.txt   # 1. 의존성 (venv 안에서)
-cp .env.example .env              # 2. 환경변수 채우기
-docker compose up -d db           # 3. PostgreSQL
-python manage.py migrate          # 4. 스키마
-python manage.py seed_catalog     # 5. 진단 기준 49개
-python manage.py createsuperuser  # 6. admin 계정
-python manage.py runserver        # 7. 백엔드 (127.0.0.1:8000)
-python manage.py analysis_worker  # 7-1. 분석 워커 (새 터미널, venv 활성화)
-cd frontend && npm install && npm run dev   # 8. 프론트 (localhost:5173)
-```
-
-## CI 게이트 (GitHub Actions)
-
-PR이 올라오면 `.github/workflows/sast-scan.yml`이 PR 브랜치와 base를 각각 우리 룰셋
-(`catalog/rules`)으로 스캔해 비교하고, **신규 HIGH가 1건이라도 있으면 병합을 막습니다.**
-
-- "신규"의 정의는 웹 비교 화면과 같습니다 — 서버와 같은 핑거프린트(`catalog/fingerprint.py`,
-  룰 | 경로 | 코드 조각)로 짝짓기 때문에 줄 번호가 밀린 것은 신규로 잡지 않습니다.
-- 결과는 job summary와 PR 코멘트에 심각도별 건수와 신규 항목 목록으로 남습니다
-  (코멘트는 갱신되어 쌓이지 않음). 신규 MEDIUM/LOW·해결·유지는 보고만 합니다.
-- 스캔 제외: `catalog/samples`, `dogfood`, `tests.py` — 의도적으로 취약한 샘플/픽스처라
-  진단 대상이 아닙니다. 판단 로직은 `scripts/sast_gate.py`, 근거는 `docs/decisions.md` 9/4.
-
-![신규 HIGH로 차단된 PR](docs/images/ci-gate-blocked.png)
-
-로컬에서 같은 판정을 재현하려면 (Semgrep JSON 두 개를 넘기면 됩니다):
-
-```bash
-semgrep scan --config=catalog/rules --json --metrics=off \
-  --exclude=catalog/samples --exclude=dogfood --exclude=tests.py \
-  --exclude=venv --exclude=frontend --output=head.json .
-python scripts/sast_gate.py --head head.json --base base.json --base-root <base 체크아웃>
-```
+로컬 실행(터미널 3개), 테스트, CI 게이트 로컬 재현은 [docs/setup.md](docs/setup.md)에 있습니다.
 
 ## 더 읽을 것
 
-- `CLAUDE.md` — 프로젝트 규칙(보안 규칙 포함)
-- `docs/plan.md` — 상세 계획
-- `docs/requirements-map.md` — RFP 요구사항별 구현 상태
-- `docs/decisions.md` — 설계 결정 기록
+- `docs/decisions.md` — 설계 결정 199건 (앞의 목차로 절을 찾는다)
+- `docs/requirements-map.md` — RFP 요구사항 50개 + 자체 개선 항목의 구현 상태
+- `docs/worklog.md` — 일자별 작업 기록
+- `docs/plan.md` — 킥오프 계획(요구사항 해석·비목표·일정)
+- `docs/self-scan-20260828.md` — 첫 도그푸딩 보고서(8/28 시점)
+- `CLAUDE.md` — 프로젝트 규칙
