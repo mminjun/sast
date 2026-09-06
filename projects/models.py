@@ -3,6 +3,8 @@
 from django.conf import settings
 from django.db import models
 
+from .exclude_paths import validate_exclude_paths_field
+
 
 class Project(models.Model):
     """분석 대상 프로젝트 (DAR-003).
@@ -23,6 +25,16 @@ class Project(models.Model):
     )
     created_at = models.DateTimeField('생성 일시', auto_now_add=True)
     updated_at = models.DateTimeField('수정 일시', auto_now=True)
+
+    # 분석 제외 경로 — Semgrep `--exclude`에 그대로 넘기는 패턴의 JSON 배열 (RFP 외 자체 개선).
+    # 줄바꿈 구분 문자열이 아니라 배열로 두는 이유: 항목 단위로 검증·중복 제거한 결과를
+    # 그대로 저장해 실행 시 다시 파싱하지 않는다. 값의 형식·의미는 projects/exclude_paths.py.
+    # 오탐 판정(catalog.Finding.status)과 구분 — 오탐은 "잘못 잡은 것", 제외는 "검사할
+    # 이유가 없는 것"(의도적 취약 샘플·픽스처). 빈 배열이면 제외 없이 전체를 스캔한다.
+    # validator는 admin 폼 등 full_clean 경로용 — API는 시리얼라이저가, 실행은 services가 검증한다.
+    exclude_paths = models.JSONField(
+        '분석 제외 경로', default=list, blank=True, validators=[validate_exclude_paths_field],
+    )
 
     # 할당 관계는 ProjectMember를 거친다 — 누가 언제 할당했는지 남기기 위해 through를 쓴다 (DAR-004).
     members = models.ManyToManyField(

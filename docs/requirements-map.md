@@ -88,6 +88,7 @@
 | 분석 이력화 (9/2) | 프로젝트 내 회차(sequence) 표시, 행별 직전 대비 변화량 | analysis(sequence), catalog `GET /api/projects/{id}/run-changes/` |
 | CI 게이트 (9/4) | PR마다 base·head를 우리 룰셋으로 스캔해 서버와 같은 핑거프린트로 신규/해결/유지 분류, job summary·PR 코멘트 요약, 신규 HIGH면 실패. 조각 읽기를 `catalog/snippet.py`로 분리해 서버와 공유 | `.github/workflows/sast-scan.yml`, `scripts/sast_gate.py`, `catalog/snippet.py` |
 | 오탐 관리 (9/5) | Finding 판정(미처리/오탐/수용)+사유·판정자·일시, 직전 완료 실행 승계(같은 run 판정 우선, 재표준화 보존), 관리자 PATCH+접근 로그, 목록 status 필터, diff·변화량 오탐 제외(`false_positive` 키)·수용 포함, 결과 화면 판정 칩·편집기, 비교 페이지 안내 | catalog(models 0004, services `_carry_over_status`·`previous_succeeded_run`, `PATCH /api/findings/{id}/status/`), frontend `RunDetailPage`·`ComparePage` |
+| 분석 제외 경로 (9/5) | Project.exclude_paths(JSON 배열, 관리자만 수정) → 실행 시 Semgrep `--exclude` 인자. CI 워크플로 제외 목록과 같은 개념(오탐=잘못 잡은 것, 제외=검사할 이유가 없는 것). 항목 검증(`..`·절대 경로·역슬래시 거부, 50개·200자), 제외 후 대상 0개면 실패 메시지로 구분, 상세 화면 편집·표시 | projects(models 0003, `exclude_paths.py`, serializers), analysis/services `run_semgrep`·`_scan_target_presence`, frontend `ProjectDetailPage` |
 
 ## 현황 요약 (2026-09-02 기준)
 

@@ -5,11 +5,13 @@
 """
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import Role
+from projects.exclude_paths import is_excluded
 from projects.models import Project, ProjectMember
 
 User = get_user_model()
@@ -404,3 +406,165 @@ class DataIntegrityTests(ProjectTestCase):
 
         with self.assertRaises(ProtectedError):
             self.user_a.delete()
+
+
+class ExcludePathsTests(ProjectTestCase):
+    """프로젝트별 분석 제외 경로 — 입력 검증·저장·노출 (RFP 외 자체 개선).
+
+    값이 그대로 Semgrep `--exclude` 인자가 되므로 여기서 걸러진 것만 실행에 도달한다.
+    실행 반영은 analysis/tests.py ExcludePathsExecuteTests.
+    """
+
+    def _create(self, exclude_paths):
+        self.login(self.admin)
+        return self.client.post(
+            LIST_URL, {'name': '제외 테스트', 'exclude_paths': exclude_paths}, format='json',
+        )
+
+    def _patch(self, exclude_paths):
+        self.login(self.admin)
+        return self.client.patch(
+            detail_url(self.project_a.pk), {'exclude_paths': exclude_paths}, format='json',
+        )
+
+    def test_defaults_to_empty_list(self):
+        self.login(self.admin)
+        response = self.client.post(LIST_URL, {'name': '기본'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['exclude_paths'], [])
+        self.assertEqual(Project.objects.get(pk=response.data['id']).exclude_paths, [])
+
+    def test_admin_creates_project_with_exclude_paths(self):
+        response = self._create(['catalog/samples', 'tests.py'])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['exclude_paths'], ['catalog/samples', 'tests.py'])
+        project = Project.objects.get(pk=response.data['id'])
+        self.assertEqual(project.exclude_paths, ['catalog/samples', 'tests.py'])
+
+    def test_admin_updates_exclude_paths(self):
+        response = self._patch(['dogfood'])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.project_a.refresh_from_db()
+        self.assertEqual(self.project_a.exclude_paths, ['dogfood'])
+
+    def test_admin_clears_exclude_paths_with_empty_list(self):
+        self.project_a.exclude_paths = ['dogfood']
+        self.project_a.save()
+
+        response = self._patch([])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.project_a.refresh_from_db()
+        self.assertEqual(self.project_a.exclude_paths, [])
+
+    def test_entries_are_normalized_and_deduplicated(self):
+        # 앞뒤 공백·슬래시는 Semgrep에 의미가 없으므로 하나의 저장 형태로 맞춘다.
+        response = self._patch([' catalog/samples/ ', '/catalog/samples', 'tests.py', 'tests.py'])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['exclude_paths'], ['catalog/samples', 'tests.py'])
+
+    def test_glob_and_korean_directory_names_are_accepted(self):
+        response = self._patch(['*.min.js', '테스트/픽스처', 'build-?'])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['exclude_paths'], ['*.min.js', '테스트/픽스처', 'build-?'])
+
+    def test_rejects_unsafe_or_malformed_entries(self):
+        # 경로 조작·절대 경로·역슬래시·셸 메타·semgrepignore 부정 등은 인자로 넘기지 않는다.
+        for bad in (
+            ['../secrets'], ['a/../b'], ['/'], ['C:/Windows'], ['a\\b'], ['a//b'],
+            ['-x'], ['!important'], ['a;rm'], ['$(x)'], ['a\nb'], [''], ['   '], ['.'],
+            ['x' * 201],
+        ):
+            with self.subTest(bad=bad):
+                response = self._patch(bad)
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                # 화면(ApiError.detail)이 읽을 수 있게 평평한 문자열 목록으로 돌려준다.
+                self.assertIsInstance(response.data['exclude_paths'], list)
+                self.assertIsInstance(str(response.data['exclude_paths'][0]), str)
+                self.project_a.refresh_from_db()
+                self.assertEqual(self.project_a.exclude_paths, [])
+
+    def test_rejects_non_list_and_non_string_items(self):
+        for bad in ('catalog/samples', {'a': 1}, [None], [['x']]):
+            with self.subTest(bad=bad):
+                response = self._patch(bad)
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn('exclude_paths', response.data)
+
+    def test_rejects_too_many_entries(self):
+        response = self._patch([f'dir{i}' for i in range(51)])
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('exclude_paths', response.data)
+
+    def test_error_message_names_the_offending_entry(self):
+        response = self._patch(['ok', '../bad'])
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('2번째', str(response.data['exclude_paths'][0]))
+        self.assertIn('../bad', str(response.data['exclude_paths'][0]))
+
+    def test_user_cannot_change_exclude_paths(self):
+        # 수정은 관리자 전용 (SEC-003) — 할당된 사용자여도 403.
+        self.login(self.user_a)
+        response = self.client.patch(
+            detail_url(self.project_a.pk), {'exclude_paths': ['x']}, format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.project_a.refresh_from_db()
+        self.assertEqual(self.project_a.exclude_paths, [])
+
+    def test_assigned_user_sees_exclude_paths_in_detail(self):
+        # 결과를 읽는 사람은 무엇이 검사에서 빠졌는지도 알아야 한다.
+        self.project_a.exclude_paths = ['catalog/samples']
+        self.project_a.save()
+        self.login(self.user_a)
+
+        response = self.client.get(detail_url(self.project_a.pk))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['exclude_paths'], ['catalog/samples'])
+
+
+class ExcludePathMatchingTests(APITestCase):
+    """is_excluded가 Semgrep 1.175.0 `--exclude`와 같은 규칙인지 (2026-09-05 실험값)."""
+
+    def test_pattern_with_slash_is_anchored_at_root(self):
+        self.assertTrue(is_excluded(('catalog', 'samples', 'v.py'), ['catalog/samples']))
+        self.assertTrue(is_excluded(('catalog', 'samples', 'deep', 'v.py'), ['catalog/samples']))
+        self.assertFalse(is_excluded(('sub', 'catalog', 'samples', 'v.py'), ['catalog/samples']))
+        self.assertFalse(is_excluded(('catalog', 'other.py'), ['catalog/samples']))
+
+    def test_pattern_without_slash_matches_any_depth_name(self):
+        self.assertTrue(is_excluded(('tests.py',), ['tests.py']))
+        self.assertTrue(is_excluded(('pkg', 'tests.py'), ['tests.py']))
+        self.assertTrue(is_excluded(('sub', 'catalog', 'samples', 'v.py'), ['samples']))
+        self.assertFalse(is_excluded(('pkg', 'test_x.py'), ['tests.py']))
+
+    def test_glob_patterns(self):
+        self.assertTrue(is_excluded(('a', 'b.py'), ['*.py']))
+        self.assertTrue(is_excluded(('catalog', 'samples', 'v.py'), ['catalog/sam*']))
+        self.assertFalse(is_excluded(('catalog', 'other.py'), ['catalog/sam*']))
+
+    def test_no_patterns_excludes_nothing(self):
+        self.assertFalse(is_excluded(('catalog', 'samples', 'v.py'), []))
+
+
+class ExcludePathsModelValidationTests(ProjectTestCase):
+    """모델 validator — Django admin 폼처럼 DRF를 거치지 않는 저장 경로에서도 같은 규칙."""
+
+    def test_full_clean_rejects_invalid_entries(self):
+        self.project_a.exclude_paths = ['../etc']
+        with self.assertRaises(ValidationError) as ctx:
+            self.project_a.full_clean()
+        self.assertIn('exclude_paths', ctx.exception.message_dict)
+
+    def test_full_clean_accepts_valid_entries(self):
+        self.project_a.exclude_paths = ['catalog/samples', 'tests.py']
+        self.project_a.full_clean()  # 예외 없음
