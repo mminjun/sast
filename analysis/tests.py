@@ -1813,3 +1813,198 @@ class InterproceduralSummaryTests(SimpleTestCase):
         # a→b 체인 + v의 요약이 a의 경로를 이어받아 자라므로 3~4패스에 안정된다. 상한에는 닿지 않는다.
         self.assertGreaterEqual(result['stats']['summary_passes'], 3)
         self.assertLess(result['stats']['summary_passes'], SUMMARY_PASSES)
+
+
+# ---------------------------------------------------------------------------
+# 자체 taint 엔진 — 3단계 클래스 필드 경유 (docs/decisions.md 2026-09-06 custom-taint 3단계)
+# ---------------------------------------------------------------------------
+
+class ClassFieldSummaryTests(SimpleTestCase):
+    """클래스 단위 필드 환경(모든 메서드의 self.<f> 대입 합집합)과 메서드 요약."""
+
+    def test_field_assigned_in_one_method_and_read_in_another(self):
+        source = '''
+            import os
+            class Loader:
+                def load(self, request):
+                    self.q = request.GET.get("q")
+                def run(self):
+                    os.system(self.q)
+        '''
+        finding = _traces(source)[7]
+        self.assertEqual(finding.taint.kind, 'input')
+        self.assertEqual(finding.taint.source['line'], 5)
+        self.assertEqual(
+            [(s.get('role'), s['line'], s.get('method')) for s in finding.taint.steps],
+            [('field', 5, 'load'), ('enter', 6, None)],
+        )
+
+    def test_constructor_parameter_reaches_field_sink(self):
+        source = '''
+            import os
+            class Job:
+                def __init__(self, cmd):
+                    self.cmd = cmd
+                def run(self):
+                    os.system(self.cmd)
+        '''
+        finding = _traces(source)[7]
+        self.assertEqual(finding.taint.kind, 'param')
+        self.assertEqual([(s.get('role'), s['line']) for s in finding.taint.steps], [('field', 5), ('enter', 6)])
+
+    def test_field_to_field_chain(self):
+        source = '''
+            class Chain:
+                def load(self, request):
+                    self.raw = request.POST["e"]
+                def prepare(self):
+                    self.expr = self.raw.strip()
+                def evaluate(self):
+                    eval(self.expr)
+        '''
+        finding = _traces(source)[8]
+        self.assertEqual([(s.get('role'), s.get('method')) for s in finding.taint.steps],
+                         [('field', 'load'), ('field', 'prepare'), ('enter', None)])
+
+    def test_field_through_method_summary_to_sink(self):
+        source = '''
+            import requests
+            class Proxy:
+                def load(self, request):
+                    self.url = request.GET.get("url")
+                def fetch(self):
+                    return self.get(self.url)
+                def get(self, target):
+                    return requests.get(target, timeout=5)
+        '''
+        finding = _traces(source)[9]
+        self.assertEqual(finding.taint.kind, 'input')
+        self.assertEqual([s.get('role') for s in finding.taint.steps], ['field', 'enter', 'call', 'enter'])
+        self.assertEqual(finding.paths_count, 2)  # get 자신(매개변수 소스) + 필드 경로
+
+    def test_field_assigned_by_two_methods_counts_paths(self):
+        source = '''
+            class Multi:
+                def a(self, request):
+                    self.q = request.GET.get("q")
+                def b(self, request):
+                    self.q = request.POST["q"]
+                def run(self, conn):
+                    conn.cursor().execute("SELECT " + self.q)
+        '''
+        finding = _traces(source)[8]
+        self.assertEqual(finding.paths_count, 2)
+
+    def test_same_method_flow_is_still_stage_one(self):
+        source = '''
+            import os
+            class Same:
+                def run(self, request):
+                    self.cmd = request.GET.get("c")
+                    os.system(self.cmd)
+        '''
+        finding = _traces(source)[6]
+        self.assertEqual([s.get('role') for s in finding.taint.steps], [])  # 필드 노드 없음 — 같은 메서드 안
+
+    def test_clean_constant_and_overwritten_fields_are_not_flagged(self):
+        source = '''
+            import os, shlex
+            class A:
+                def load(self, request):
+                    self.port = int(request.GET.get("p"))
+                def run(self):
+                    os.system(f"nc {self.port}")
+            class B:
+                def __init__(self):
+                    self.t = "localhost"
+                def run(self):
+                    os.system("ping " + self.t)
+            class C:
+                def load(self, request):
+                    self.cmd = request.GET.get("c")
+                def run(self):
+                    self.cmd = "ls"
+                    os.system(self.cmd)
+            class D:
+                def run(self, request):
+                    os.system(self.quote(request.GET.get("h")))
+                def quote(self, v):
+                    return shlex.quote(v)
+        '''
+        self.assertEqual(_sinks(source), set())
+
+    def test_flow_insensitive_clear_is_a_known_false_positive(self):
+        # 호출 순서를 보지 않는다 — clear()가 있어도 합집합이라 잡힌다(decisions에 알려진 오탐 모양으로 기록).
+        source = '''
+            import os
+            class Cleared:
+                def load(self, request):
+                    self.q = request.GET.get("q")
+                def clear(self):
+                    self.q = ""
+                def run(self):
+                    os.system(self.q)
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 9)})
+
+    def test_cls_and_class_attributes_are_not_fields(self):
+        source = '''
+            import os
+            class K:
+                cmd = "ls"
+                @classmethod
+                def go(cls, request):
+                    cls.cmd = request.GET.get("c")
+                @classmethod
+                def run(cls):
+                    os.system(cls.cmd)
+        '''
+        self.assertEqual(_sinks(source), set())
+
+    def test_nested_class_methods_are_analyzed_standalone(self):
+        source = '''
+            import os
+            def outer():
+                class Inner:
+                    def load(self, request):
+                        self.q = request.GET.get("q")
+                    def run(self):
+                        os.system(self.q)
+        '''
+        self.assertEqual(_sinks(source), set())  # 중첩 클래스는 필드 환경 없음(범위 밖)
+
+    def test_method_calls_module_function_summary(self):
+        source = '''
+            import os
+            def clean(x):
+                return int(x)
+            def lie(x):
+                return x
+            class M:
+                def a(self, request):
+                    os.system(f"nc {clean(request.GET.get('p'))}")
+                def b(self, request):
+                    os.system(lie(request.GET.get('c')))
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 11)})
+
+    def test_class_pass_converges_and_summary_keys_may_disappear(self):
+        # 필드 환경이 패스마다 바뀌면 요약의 싱크 키가 사라질 수 있다 — 2단계 병합이 None을 다루지 못해 죽던 결함.
+        root = Path(tempfile.mkdtemp(prefix='custom-taint-'))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / 'app.py').write_text(textwrap.dedent('''
+            import os
+            class W:
+                def __init__(self, x):
+                    self.x = x
+                def a(self):
+                    self.y = self.x
+                def b(self):
+                    os.system(self.y)
+                def c(self, v):
+                    self.x = v
+        '''), encoding='utf-8')
+        result = analyze_directory(root)
+        self.assertEqual(result['errors'], [])
+        self.assertLess(result['stats']['class_passes'], SUMMARY_PASSES)
+        self.assertEqual([i['start']['line'] for i in result['results']], [9])

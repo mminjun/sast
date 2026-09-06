@@ -535,3 +535,12 @@
   결함 셋: 반환식의 첫 매개변수만 기록(→ `taints_of`로 전부), `conn.cursor().execute` 싱크 누락(점 표기가 Call에서
   끊김, 1단계부터 있던 잠재 결함), Django 스트레스에서 상호 재귀 요약이 5↔8로 진동해 상한에 닿음(→ 이전 패스와
   합쳐 단조, 5패스 수렴). 성능: 저장소 1.0초·zip 0.2초·Django 906파일 4.1초. 테스트: 신규 18(요약 15·catalog 3), 전체 415개 통과
+- 자체 taint 3단계(feature/custom-taint-class, 마지막): Plan Mode에서 프로토타입으로 흐름 비민감의 대가를 실측
+  — 자체 저장소 0건, Django 906파일 15건(전부 매개변수, 14건은 `__init__`만 대입), 호출 순서 오탐 0, `clear()` 모양
+  0, 좁힌 모드(입력+`__init__`) 15→14 → 좁히지 않고 규칙 일관성(설계 우려가 실측으로 뒤집힌 사례, decisions).
+  구현: `MethodAnalyzer`(self.m → 메서드 요약, `resolve_callee`), 클래스별 필드 환경·메서드 요약 한 고정점,
+  보고 패스는 다른 메서드에서 대입된 필드만, role `field`(대입 메서드 이름, 소스와 같은 줄이면 force), paths_count에
+  대입 메서드 수 반영, 화면 `대입 (load)` 라벨. 샘플 `taint_class_vulnerable.py`(7건)/`taint_class_safe.py`. 실측
+  N=5·M=1, `ClassFieldTests`가 고정. 잡은 것: 2단계 `_longer`의 None 결함(요약 키 소실), 필드 이름 `name`이 IV-03
+  속성 sanitizer에 걸리는 알려진 미탐(샘플 이름 변경·기록). 성능: 저장소 1.0초·zip 0.2초·Django 약 8초. 테스트 신규
+  15(클래스 12·catalog 3), Semgrep 한계 표를 "넘은 것/남은 것"으로 갱신

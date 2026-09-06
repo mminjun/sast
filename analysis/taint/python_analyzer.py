@@ -1,4 +1,4 @@
-"""Python 소스의 taint 분석 — 함수 안 + 같은 파일 함수 간 (docs/decisions.md 2026-09-06 custom-taint 판단 3·4, 2단계).
+"""Python 소스의 taint 분석 — 함수 안 + 같은 파일 함수 간 + 클래스 필드 (docs/decisions.md 2026-09-06 custom-taint 1~3단계).
 
 `ast`로 파싱한 뒤 함수마다 문장을 차례로 돌며 환경({접근 경로: Taint})을 흘린다. NodeVisitor를 쓰지 않는
 이유: visit가 환경을 돌려주지 않아 분기 병합을 표현할 수 없다. 제어 흐름은 경로 비민감 합집합(may)이다 —
@@ -7,14 +7,19 @@ try는 본문·핸들러·else·finally를 합친다. 검사 가드(`if x in ALL
 `if not p.is_relative_to(ROOT): raise`)는 그 뒤의 변수를 깨끗하게 본다(Semgrep by-side-effect와 같은 근사).
 
 같은 파일 함수 간(2단계): 모듈 최상위 함수의 요약(Summary — 매개변수→반환, 매개변수→싱크, 본문 안 입력→반환)을
-빈 요약에서 시작해 모양이 안 바뀔 때까지 반복 계산하고(고정점, 상한 SUMMARY_PASSES), 호출 지점에서 그 요약대로
-전파·보고한다. 같은 파일 함수는 이름 규약(validate_ 등)이 아니라 **본문(요약)만** 본다 — 이름이 거짓말하는
-헬퍼는 잡히고, 본문이 씻는 헬퍼는 깨끗하다. 요약이 아직 없는 함수는 빈 요약(전파 없음)이라 기저 사례 없는
-재귀는 깨끗하게 안정된다. 호출이 정의보다 앞이어도 요약은 모듈 단위로 먼저 계산돼 있다.
+빈 요약에서 시작해 모양이 안 바뀔 때까지 반복 계산하고(고정점, 상한 SUMMARY_PASSES, 이전 패스와 합쳐 단조),
+호출 지점에서 그 요약대로 전파·보고한다. 같은 파일 함수는 이름 규약(validate_ 등)이 아니라 **본문(요약)만** 본다.
+요약이 아직 없는 함수는 빈 요약(전파 없음)이라 기저 사례 없는 재귀는 깨끗하게 안정된다.
 
-포기한 것(문서화): 경로 민감도, 전역·클로저 변수, *args/**kwargs, 데코레이터 의미, 동적 기능, 같은 싱크의 다수
-경로 표시(대표 1개 + paths_count). 중첩 함수·메서드는 각각 독립된 함수로 분석하고 모듈 요약에는 넣지 않는다
-(호출은 '모르는 호출'로 전파). 클래스 필드는 3단계.
+클래스 필드(3단계): 최상위 클래스마다 메서드 요약과 필드 환경({('self', f): Taint} — 모든 메서드의 `self.f = …`
+합집합, `__init__` 매개변수 포함)을 한 고정점에서 계산하고, 필드를 들고 각 메서드를 다시 돌려 **다른 메서드에서
+대입된 필드**를 읽는 싱크를 보고한다(경로: 대입 메서드의 field 노드 → 읽는 메서드의 enter). `self.m(...)`은
+같은 클래스 메서드 요약으로 본다. 흐름 비민감이다 — 호출 순서·`clear()` 되돌림은 보지 않는다(실측 비용은
+decisions 참고).
+
+포기한 것(문서화): 경로 민감도·호출 순서, 전역·클로저 변수, *args/**kwargs, 데코레이터 의미, 동적 기능, 상속·
+super()·클래스 밖 대입의 함수 간 추적, 클래스 속성·property·classmethod의 cls.x, 중첩 클래스(메서드를 독립 함수로만
+분석), 같은 싱크의 다수 경로 표시(대표 1개 + paths_count).
 """
 
 import ast
@@ -28,11 +33,13 @@ from .state import (
 # (a = b; b = c; c = 입력)까지 잡고 그보다 긴 체인은 놓친다(상한이 어디든 한계는 남는다). 비용이 사실상 0이고
 # 미탐은 오탐과 달리 아무도 모르는 채 지나가므로 2 → 3으로 올렸다 (docs/decisions.md 2026-09-06 custom-taint).
 LOOP_PASSES = 3
-# 함수 요약 고정점 반복의 상한(안전장치). 요약의 모양(키 집합·경유 노드 수)은 유한·단조라 정상 코드는 3~4패스에
-# 멈춘다(실측). 한 패스에 체인이 한 단계 번지므로 k단계 반환 체인은 k+1패스에서 완성된다 — 16이면 15단계까지.
+# 함수 요약·클래스 필드 고정점 반복의 상한(안전장치). 요약을 이전 패스와 합쳐 단조 증가시키므로 반드시 안정된다 —
+# 정상 코드는 3~5패스(실측). 한 패스에 체인이 한 단계 번지므로 k단계 반환 체인은 k+1패스에서 완성된다.
 SUMMARY_PASSES = 16
 
 _SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+_FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
+SELF = 'self'
 
 
 class Finding:
@@ -129,9 +136,10 @@ class FunctionAnalyzer:
         self.params = param_names(func)
 
     # --- 노드 -------------------------------------------------------------------------
-    def node(self, ast_node, role=None):
+    def node(self, ast_node, role=None, method=None):
         line = ast_node.lineno
-        return node(self.rel_path, line, self.lines[line - 1].strip() if line <= len(self.lines) else '', role)
+        return node(self.rel_path, line, self.lines[line - 1].strip() if line <= len(self.lines) else '',
+                    role, method)
 
     # --- 소스 판정 ---------------------------------------------------------------------
     def _request_source(self, expr):
@@ -149,16 +157,18 @@ class FunctionAnalyzer:
             return expr.attr in spec.REQUEST_PLAIN_ATTRS and isinstance(expr.value, ast.Name)
         return False
 
-    # --- 같은 파일 함수 호출 -------------------------------------------------------------
-    def _module_callee(self, call):
-        """호출 대상이 모듈 최상위 함수면 그 이름. 점 표기(메서드·모듈 함수)는 해당 없음."""
+    # --- 같은 파일 함수·메서드 호출 --------------------------------------------------------
+    def resolve_callee(self, call):
+        """요약으로 볼 수 있는 호출이면 (정의 사전, 요약 사전, 이름). 모듈 최상위 함수의 바로 부르기만."""
         name = call.func.id if isinstance(call.func, ast.Name) else None
-        return name if name in self.functions else None
+        if name in self.functions:
+            return self.functions, self.summaries, name
+        return None
 
-    def _mapped_args(self, call, callee_name, env):
-        """[(피호출자 매개변수 위치, 인자 오염)] — 위치 인자는 순서, 키워드는 이름. 기본값은 상수로 본다.
+    def _mapped_args(self, call, definitions, callee_name, env):
+        """[(피호출자 매개변수 위치, [인자 오염])] — 위치 인자는 순서, 키워드는 이름. 기본값은 상수로 본다.
         *args/**kwargs 풀기는 범위 밖."""
-        names = param_names(self.functions[callee_name])
+        names = param_names(definitions[callee_name])
         mapped = []
         for index, arg in enumerate(call.args):
             if index < len(names) and not isinstance(arg, ast.Starred):
@@ -168,12 +178,13 @@ class FunctionAnalyzer:
                 mapped.append((names.index(keyword.arg), self.taints_of(keyword.value, env)))
         return mapped
 
-    def _through_summary(self, call, callee_name, env):
-        """요약이 있는 같은 파일 함수 호출의 결과 오염. 요약이 '깨끗'이면 인자가 오염이어도 None."""
-        summary = self.summaries.get(callee_name, EMPTY_SUMMARY)
-        callee = self.functions[callee_name]
+    def _through_summary(self, call, resolved, env):
+        """요약이 있는 같은 파일 함수·메서드 호출의 결과 오염 전부. 요약이 '깨끗'이면 인자가 오염이어도 []."""
+        definitions, summaries, callee_name = resolved
+        summary = summaries.get(callee_name, EMPTY_SUMMARY)
+        callee = definitions[callee_name]
         flowed_all = []
-        for index, taints in self._mapped_args(call, callee_name, env):
+        for index, taints in self._mapped_args(call, definitions, callee_name, env):
             if index not in summary.param_to_return:
                 continue
             for taint in taints:
@@ -186,13 +197,14 @@ class FunctionAnalyzer:
             flowed_all.append(summary.return_taint.step(self.node(call, 'return')))
         return flowed_all
 
-    def _report_callee_sinks(self, call, callee_name, env):
-        """인자의 오염이 같은 파일 함수 안 싱크에 닿으면 그 싱크 위치에 호출자 경로로 보고한다."""
-        summary = self.summaries.get(callee_name, EMPTY_SUMMARY)
+    def _report_callee_sinks(self, call, resolved, env):
+        """인자의 오염이 같은 파일 함수·메서드 안 싱크에 닿으면 그 싱크 위치에 호출자 경로로 보고한다."""
+        definitions, summaries, callee_name = resolved
+        summary = summaries.get(callee_name, EMPTY_SUMMARY)
         if not summary.param_to_sinks:
             return
-        callee = self.functions[callee_name]
-        for index, taints in self._mapped_args(call, callee_name, env):
+        callee = definitions[callee_name]
+        for index, taints in self._mapped_args(call, definitions, callee_name, env):
             for (p_index, kisa_code, _line), (sink_node, steps) in summary.param_to_sinks.items():
                 if p_index != index:
                     continue
@@ -244,10 +256,10 @@ class FunctionAnalyzer:
             callee = dotted(expr.func) or ''
             if callee in spec.SOURCE_CALLS or self._request_source(expr):
                 return [Taint(self.node(expr), kind=KIND_INPUT)]
-            module_callee = self._module_callee(expr)
-            if module_callee is not None:
-                # 같은 파일 함수: 본문(요약)만 본다 — 이름 규약(validate_ 등)은 적용하지 않는다.
-                return self._through_summary(expr, module_callee, env)
+            resolved = self.resolve_callee(expr)
+            if resolved is not None:
+                # 같은 파일 함수·메서드: 본문(요약)만 본다 — 이름 규약(validate_ 등)은 적용하지 않는다.
+                return self._through_summary(expr, resolved, env)
             if callee and spec.is_sanitizer_call(callee):
                 return []
             # 모르는 호출: 인자·대상 객체의 오염이 결과로 전파된다 (Semgrep과 같은 기본).
@@ -317,10 +329,10 @@ class FunctionAnalyzer:
             self.check_call(call, env)
 
     def check_call(self, call, env):
-        module_callee = self._module_callee(call)
-        if module_callee is not None:
-            self._report_callee_sinks(call, module_callee, env)
-            return  # 같은 파일 함수는 요약이 전부다 — 스펙의 싱크로 다시 보지 않는다(로컬 정의가 우선)
+        resolved = self.resolve_callee(call)
+        if resolved is not None:
+            self._report_callee_sinks(call, resolved, env)
+            return  # 같은 파일 함수·메서드는 요약이 전부다 — 스펙의 싱크로 다시 보지 않는다(로컬 정의가 우선)
         callee = dotted(call.func) or ''
         for sink in spec.sinks_for_call(callee):
             if sink.requires_kw:
@@ -501,20 +513,49 @@ class FunctionAnalyzer:
         return env
 
 
+class MethodAnalyzer(FunctionAnalyzer):
+    """클래스 메서드 — `self.m(...)`은 같은 클래스 메서드 요약으로, 바로 부르는 이름은 모듈 함수 요약으로 본다."""
+
+    def __init__(self, func, lines, rel_path, findings, summaries, functions, methods, method_summaries):
+        super().__init__(func, lines, rel_path, findings, summaries, functions)
+        self.methods = methods
+        self.method_summaries = method_summaries
+
+    def resolve_callee(self, call):
+        f = call.func
+        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == SELF and f.attr in self.methods:
+            return self.methods, self.method_summaries, f.attr
+        return super().resolve_callee(call)
+
+
 def module_functions(tree):
     """모듈 최상위 함수 — 같은 이름이면 마지막 정의(임포트 시점의 Python 의미와 같다)."""
-    return {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    return {n.name: n for n in tree.body if isinstance(n, _FUNCTION_NODES)}
+
+
+def module_classes(tree):
+    """모듈 최상위 클래스(정의 순서). 중첩 클래스는 다루지 않는다."""
+    return [n for n in tree.body if isinstance(n, ast.ClassDef)]
+
+
+def class_methods(cls):
+    """클래스 본문의 메서드 — 같은 이름이면 마지막 정의."""
+    return {n.name: n for n in cls.body if isinstance(n, _FUNCTION_NODES)}
 
 
 def all_functions(tree):
     """모듈의 모든 함수·메서드·중첩 함수 (각각 독립된 분석 단위)."""
-    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    return [n for n in ast.walk(tree) if isinstance(n, _FUNCTION_NODES)]
 
 
 def _longer(current, candidate):
-    """(노드, 경유) 쌍 중 경유가 긴 쪽 — 요약을 패스마다 단조 증가시키는 병합 규칙."""
+    """(노드, 경유) 쌍 중 경유가 긴 쪽 — 요약을 패스마다 단조 증가시키는 병합 규칙. 한쪽이 없으면 있는 쪽.
+    (없는 쪽이 생기는 경우: 클래스 필드 환경이 패스마다 바뀌어 요약의 싱크 키가 사라질 수 있다 — 3단계 프로토타입에서
+    None 첨자로 죽었던 결함.)"""
     if current is None:
         return candidate
+    if candidate is None:
+        return current
     return candidate if len(candidate[1]) > len(current[1]) else current
 
 
@@ -538,6 +579,10 @@ def merge_summaries(previous, fresh):
     return merged
 
 
+def _shapes(summaries):
+    return {name: summary.shape() for name, summary in summaries.items()}
+
+
 def compute_summaries(functions, lines, rel_path):
     """모듈 함수 요약의 고정점. 반환: (요약, 반복 횟수). 상한 SUMMARY_PASSES는 안전장치일 뿐이다."""
     summaries = {}
@@ -548,17 +593,92 @@ def compute_summaries(functions, lines, rel_path):
             analyzer = FunctionAnalyzer(func, lines, rel_path, [], summaries, functions)
             analyzer.run()
             fresh[name] = merge_summaries(summaries.get(name), analyzer.summary)
-        shapes_before = {name: summary.shape() for name, summary in summaries.items()}
-        shapes_after = {name: summary.shape() for name, summary in fresh.items()}
+        shapes_before, shapes_after = _shapes(summaries), _shapes(fresh)
         summaries = fresh
         if shapes_after == shapes_before:
             break
     return summaries, passes
 
 
+def _field_entries(env):
+    """환경에서 ('self', 필드) 항목만."""
+    return {path: taint for path, taint in env.items() if path[0] == SELF and len(path) == 2}
+
+
+def _mark_field(taint, method_name, rel_path, lines):
+    """필드에 대입된 오염에 '어느 메서드의 어느 줄이 대입했나'(role=field) 노드를 남긴다.
+
+    대입 줄은 경유의 마지막 노드다(assign이 붙임). 소스와 같은 줄이면(`self.q = request.GET.get("q")`) 중복 제거로
+    노드가 없으므로 force로 붙인다 — 역할이 달라 읽는 데 혼동이 없다.
+    """
+    if taint.steps:
+        last = taint.steps[-1]
+        if last['line'] != taint.source['line'] or last['path'] != taint.source['path']:
+            marked = {**last, 'role': 'field', 'method': method_name}
+            return Taint(taint.source, taint.steps[:-1] + (marked,), taint.kind)
+    marked = node(rel_path, taint.source['line'], taint.source['code'], 'field', method_name)
+    return taint.step(marked, force=True)
+
+
+def analyze_class(cls, lines, rel_path, functions, summaries, findings, stats=None):
+    """클래스 하나 — 메서드 요약과 필드 환경을 한 고정점에서 계산하고, 다른 메서드에서 대입된 필드를 읽는 싱크를
+    보고한다 (docs/decisions.md 2026-09-06 custom-taint 3단계)."""
+    methods = class_methods(cls)
+    if not methods:
+        return
+    fields = {}            # {('self', f): 대표 Taint}
+    assigners = {}         # {('self', f): {(대입 메서드, 소스 줄)}} — 같은 필드에 닿은 경로 수(paths_count)
+    method_summaries = {}
+    passes = 0
+
+    def field_shape(entries):
+        return {path: (len(taint.steps), taint.kind) for path, taint in entries.items()}
+
+    for passes in range(1, SUMMARY_PASSES + 1):
+        fresh_summaries = {}
+        fresh_fields = dict(fields)
+        for name, method in methods.items():
+            analyzer = MethodAnalyzer(method, lines, rel_path, [], summaries, functions, methods, method_summaries)
+            env = analyzer.run(initial_env=fields)
+            fresh_summaries[name] = merge_summaries(method_summaries.get(name), analyzer.summary)
+            for path, taint in _field_entries(env).items():
+                if fields.get(path) is taint:
+                    continue  # 읽기만 한 필드 — 초기 환경 그대로
+                assigners.setdefault(path, set()).add((name, taint.source['line']))
+                fresh_fields[path] = prefer(fresh_fields.get(path), _mark_field(taint, name, rel_path, lines))
+        changed = (
+            field_shape(fresh_fields) != field_shape(fields)
+            or _shapes(fresh_summaries) != _shapes(method_summaries)
+        )
+        fields, method_summaries = fresh_fields, fresh_summaries
+        if not changed:
+            break
+    if stats is not None:
+        stats['class_passes'] = max(stats.get('class_passes', 0), passes)
+
+    # 보고 패스 — 필드 오염을 들고 각 메서드를 돈다. 읽는 메서드의 def 줄을 enter로 붙여 "대입 → 진입"이 보이게.
+    first_new = len(findings)
+    for name, method in methods.items():
+        entering = {
+            path: taint.step(node(rel_path, method.lineno, lines[method.lineno - 1].strip(), 'enter'))
+            for path, taint in fields.items()
+        }
+        MethodAnalyzer(method, lines, rel_path, findings, summaries, functions, methods, method_summaries).run(
+            initial_env=entering,
+        )
+    # 필드는 대표 경로 하나만 들고 돌았으므로, 다른 메서드·줄에서 대입된 후보 수를 paths_count에 더한다.
+    for finding in findings[first_new:]:
+        for step in finding.taint.steps:
+            if step.get('role') == 'field':
+                path = (SELF, step['code'].split('=', 1)[0].strip().removeprefix('self.'))
+                finding.paths_count += max(0, len(assigners.get(path, ())) - 1)
+                break
+
+
 def analyze_module(source, rel_path, stats=None):
     """소스 텍스트 하나를 분석해 Finding 목록을 돌려준다. 같은 (kisa_code, 싱크 줄)엔 하나(prefer 규칙, paths_count에
-    후보 수). stats(dict)를 주면 'summary_passes'(최대 반복 횟수)를 갱신한다. SyntaxError는 호출자(engine)가 다룬다."""
+    후보 수). stats(dict)를 주면 'summary_passes'·'class_passes'(최대 반복 횟수)를 갱신한다. SyntaxError는 호출자(engine)가
+    다룬다."""
     tree = ast.parse(source)
     lines = source.splitlines()
     functions = module_functions(tree)
@@ -567,8 +687,14 @@ def analyze_module(source, rel_path, stats=None):
         stats['summary_passes'] = max(stats.get('summary_passes', 0), passes)
 
     findings = []
+    classes = module_classes(tree)
+    class_method_ids = {id(m) for cls in classes for m in class_methods(cls).values()}
     for func in all_functions(tree):
+        if id(func) in class_method_ids:
+            continue  # 최상위 클래스의 메서드는 클래스 패스가 (필드 환경과 함께) 분석한다
         FunctionAnalyzer(func, lines, rel_path, findings, summaries, functions).run()
+    for cls in classes:
+        analyze_class(cls, lines, rel_path, functions, summaries, findings, stats)
 
     best = {}
     for finding in findings:
