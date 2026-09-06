@@ -12,6 +12,7 @@ import re
 from collections import Counter, namedtuple
 from pathlib import Path
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Q
 
@@ -25,7 +26,7 @@ from .models import DiagnosticRule, Finding, FindingStatus, Severity
 # 코드 조각 읽기 규칙(줄 수·길이 상한, 문맥)은 catalog/snippet.py 한 곳에 있다 —
 # CI 게이트(scripts/sast_gate.py)도 같은 함수로 조각을 만들어야 핑거프린트가 맞는다.
 from .snippet import read_snippet
-from .taint_trace import load_trace_file
+from .taint_trace import parse_trace_text
 
 logger = logging.getLogger(__name__)
 
@@ -181,12 +182,19 @@ def _load_traces(run, source_root):
     격리 루트 기준 상대경로로 맞춘다. 파일이 없거나 형식이 다르면 빈 dict — 실패해도 탐지 결과
     저장은 계속된다. 반환: (traces, 파일 존재 여부).
     """
-    trace_path = workspace_dir(run) / DATAFLOW_TRACE_FILE
-    exists = trace_path.exists()
-    if not exists:
+    trace_path = (workspace_dir(run) / DATAFLOW_TRACE_FILE).resolve()
+    # 여는 지점에서 격리 루트 안인지 한 번 더 확인한다 — 소스 파일을 읽는 _extract_lines와 같은
+    # 다중 방어(SEC-007). run에서 계산한 경로라 정상 흐름에서는 항상 안이다.
+    if not trace_path.is_relative_to(Path(settings.ANALYSIS_WORKSPACE_ROOT).resolve()):
         return {}, False
+    if not trace_path.exists():
+        return {}, False
+    try:
+        text = Path(fs_path(trace_path)).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return {}, True
     normalized = {}
-    for (raw_path, check_id, sink_line), trace in load_trace_file(fs_path(trace_path)).items():
+    for (raw_path, check_id, sink_line), trace in parse_trace_text(text).items():
         relative_path = _relative_path(raw_path, source_root)
         if relative_path is None:
             continue

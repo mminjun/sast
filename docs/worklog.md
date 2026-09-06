@@ -504,3 +504,11 @@
   zip을 패턴 룰(run 53)·taint 룰(run 57)로 돌려 diff → new 0/resolved 0/persisted 14(핑거프린트 안정 실증).
   자체 저장소 도그푸딩(run 56, sast_choi_src.zip)에서 매개변수 소스의 비용 확인 — IV-03 `open(param)`
   헬퍼 7건(decisions 기록, 오탐 판정 워크플로로 처리). Java·JS taint는 다음 브랜치
+- 도그푸딩 오탐 판정(taint IV-03): 자체 스캔 zip(`make_selfscan_zip.py`, 180파일)을 도그푸딩 프로젝트에
+  올려 run 58 → IV-03 `open(param)` 헬퍼 10건(테스트 헬퍼 3건 포함)을 "매개변수 소스의 구조적 오탐 —
+  호출자가 격리 검사 후 넘기는 경로" 사유로 오탐 판정. 실수 하나: 앞서 `sast_choi_src.zip`(경로에 `sast/`
+  접두사, 다른 레이아웃)으로 run 56을 돌려 직전 실행 체계가 깨졌고 run 52의 SF-06 오탐 38건이 승계되지
+  않았다 → run 56·작업 영역 삭제 후 run 52의 판정을 핑거프린트로 run 58에 복원(ORM). 같은 zip 재실행
+  run 59: FALSE_POSITIVE 48건 전부 승계, diff new 0/resolved 0/persisted 69. PR #11 게이트 첫 실행은
+  신규 파일 `taint_trace.py`의 `open(file_path)`가 '신규 HIGH'로 잡혀 차단 → 파일 읽기를 ingest로 옮기고
+  `is_relative_to` 격리 검사 추가(자체 저장소 IV-03 6건 유지, 신규 0)

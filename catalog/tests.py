@@ -45,7 +45,7 @@ from .models import DiagnosticRule, Finding, FindingStatus, KisaCategory, Severi
 from .services import (
     bare_check_id, ingest_findings, normalize_severity, previous_succeeded_run,
 )
-from .taint_trace import load_trace_file, parse_trace_text
+from .taint_trace import parse_trace_text
 from .views import FindingPagination
 
 User = get_user_model()
@@ -2126,9 +2126,6 @@ class TaintTraceAdapterTests(SimpleTestCase):
     def test_garbage_and_empty_input_yield_nothing(self):
         for text in ('', None, 'hello\n', '   1┆ x\n', '┆┆┆', TRACE_TEXT.replace('┆', '|')):
             self.assertEqual(parse_trace_text(text), {}, repr(text)[:40])
-
-    def test_missing_file_yields_nothing(self):
-        self.assertEqual(load_trace_file(Path(tempfile.gettempdir()) / 'no-such-trace-file.txt'), {})
 
 
 class IngestEngineAndTraceTests(WorkspaceMixin, TestCase):

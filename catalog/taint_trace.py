@@ -20,8 +20,9 @@ docs/decisions.md 2026-09-06 taint). 그래서 실행 때 `--text-output=<작업
             6┆ os.system(line)
             ⋮┆----------------------------------------  ← 다음 finding
 
-이 모듈은 Django를 import하지 않고, 어떤 입력에도 예외를 내지 않는다 — 오염 경로는 부가정보라
-파싱이 깨져도 탐지 결과 저장은 계속돼야 한다. Semgrep 버전이 바뀌어 형식이 달라지면 결과는
+이 모듈은 Django를 import하지 않고 파일도 열지 않는다(텍스트를 받아 파싱만 — 파일 읽기는 격리 루트
+검사와 함께 호출자가 한다, catalog/services.py). 어떤 입력에도 예외를 내지 않는다 — 오염 경로는
+부가정보라 파싱이 깨져도 탐지 결과 저장은 계속돼야 한다. Semgrep 버전이 바뀌어 형식이 달라지면 결과는
 "경로 없음"이 되고, ingest가 "taint 결과는 있는데 경로가 한 건도 안 붙음"을 경고 로그로 남긴다
 (catalog/services.py). 반환하는 경로(path)는 Semgrep이 출력한 문자열 그대로다 — 격리 루트 기준
 상대경로로 맞추는 것은 호출자(ingest) 몫이다.
@@ -160,11 +161,3 @@ def _parse(text):
     _finish(traces, path, rule_id, current)
     return traces
 
-
-def load_trace_file(file_path):
-    """trace 파일을 읽어 parse_trace_text에 넘긴다. 없거나 못 읽으면 빈 dict."""
-    try:
-        with open(file_path, encoding='utf-8', errors='replace') as handle:
-            return parse_trace_text(handle.read())
-    except OSError:
-        return {}
