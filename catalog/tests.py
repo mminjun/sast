@@ -2530,3 +2530,97 @@ class CustomTaintParityTests(WorkspaceMixin, TestCase):
         self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
         self.assertEqual(run.custom_result['results'], [])
         self.assertEqual(Finding.objects.filter(run=run).count(), 0)
+
+
+# ---------------------------------------------------------------------------
+# 자체 taint 엔진 2단계 — Semgrep을 넘는 지점을 숫자로 (docs/decisions.md 2026-09-06 custom-taint 2단계)
+# ---------------------------------------------------------------------------
+
+# taint_inter_vulnerable.py에서 자체 엔진이 잡아야 하는 (KISA 코드, 싱크 줄). 총 8건.
+EXPECTED_INTER_FINDINGS = {
+    ('KISA-IV-05', 24), ('KISA-IV-01', 33), ('KISA-IV-05', 45), ('KISA-IV-12', 54),
+    ('KISA-IV-05', 72), ('KISA-IV-05', 76), ('KISA-IV-12', 89), ('KISA-IV-02', 103),
+}
+# 그중 Semgrep taint(1.175.0)가 못 잡고 자체 엔진만 잡는 것 — 이름 규약이 거짓말하는 헬퍼 2, 헬퍼 안 입력→반환 2.
+EXPECTED_INTER_CUSTOM_ONLY = {('KISA-IV-05', 24), ('KISA-IV-01', 33), ('KISA-IV-05', 45), ('KISA-IV-12', 54)}
+# taint_inter_safe.py에서 Semgrep taint가 잡는 건수 — 전부 Semgrep의 알려진 오탐(같은 파일 함수의 본문을 못 본다).
+EXPECTED_INTER_SEMGREP_FALSE_POSITIVES = 5
+
+
+@tag('semgrep')
+@unittest.skipUnless(SEMGREP_AVAILABLE, 'semgrep 바이너리가 없어 건너뜀')
+@override_settings(ANALYSIS_SEMGREP_CONFIG=str(settings.CATALOG_RULES_DIR))
+class InterproceduralTests(WorkspaceMixin, TestCase):
+    """2단계 종료 기준 — Semgrep이 못 잡고 우리가 잡는 케이스(N)와 Semgrep의 오탐(M)을 숫자로 고정한다."""
+
+    def setUp(self):
+        super().setUp()
+        seed()
+        self.setup_workspace()
+        self.admin = User.objects.create_user(
+            email='admin@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        self.project = Project.objects.create(name='p', created_by=self.admin)
+
+    def analyze(self, name):
+        run = self.make_run(self.project, self.admin, status_value=AnalysisStatus.RUNNING)
+        self.write_source(run, f'src/{name}', (SAMPLES_DIR / name).read_text(encoding='utf-8'))
+        execute_analysis(run)
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+        return run
+
+    @staticmethod
+    def _semgrep_version():
+        return subprocess.run(['semgrep', '--version'], capture_output=True, text=True).stdout.strip()
+
+    def test_vulnerable_sample_custom_engine_catches_what_semgrep_misses(self):
+        run = self.analyze('taint_inter_vulnerable.py')
+        stats = run.custom_result['stats']
+        self.assertEqual(run.custom_result['errors'], [])
+
+        found = {(f.rule_code, f.start_line) for f in Finding.objects.filter(run=run)}
+        self.assertEqual(found, EXPECTED_INTER_FINDINGS)
+        custom_only = {
+            (f.rule_code, f.start_line) for f in Finding.objects.filter(run=run, extra__engine='custom-taint')
+            if 'engines' not in f.extra
+        }
+        self.assertEqual(custom_only, EXPECTED_INTER_CUSTOM_ONLY)
+        self.assertEqual(stats['custom_only'], len(EXPECTED_INTER_CUSTOM_ONLY), stats)
+        self.assertEqual(stats['semgrep_only'], 0, stats)   # 자체 엔진이 놓친 Semgrep 결과는 없어야 한다
+        self.assertEqual(stats['both'], len(EXPECTED_INTER_FINDINGS) - len(EXPECTED_INTER_CUSTOM_ONLY))
+
+    def test_vulnerable_sample_traces_cross_the_call_boundary(self):
+        run = self.analyze('taint_inter_vulnerable.py')
+        by_line = {f.start_line: f.extra['taint_trace'] for f in Finding.objects.filter(run=run)}
+        # 헬퍼 안 싱크(run_shell) — 호출자의 request부터 호출 → 진입 → 싱크
+        trace = by_line[76]
+        self.assertEqual(trace['source']['line'], 80)
+        self.assertEqual([(s.get('role'), s['line']) for s in trace['steps']], [('call', 81), ('enter', 75)])
+        self.assertEqual(trace['paths_count'], 3)
+        # 헬퍼 안 입력 → 반환 → 호출자 싱크
+        trace = by_line[45]
+        self.assertEqual(trace['source']['line'], 40)
+        self.assertEqual([(s.get('role'), s['line']) for s in trace['steps']], [('return', 41)])
+        # 두 단계 반환 체인 — 호출·진입·반환이 시간 순서로
+        trace = by_line[72]
+        # (싱크와 같은 줄의 호출 노드는 표시 중복이라 저장하지 않는다)
+        self.assertEqual(
+            [s.get('role') for s in trace['steps']],
+            ['enter', 'call', 'enter', 'return', 'return'],
+        )
+
+    def test_safe_sample_custom_engine_is_clean_and_semgrep_false_positives_are_pinned(self):
+        run = self.analyze('taint_inter_safe.py')
+        self.assertEqual(
+            run.custom_result['results'], [],
+            '자체 엔진이 taint_inter_safe.py에서 결과를 냈습니다 — 헬퍼 본문 판단(요약)이 깨졌는지 확인하세요.',
+        )
+        semgrep_hits = Finding.objects.filter(run=run, extra__engine='semgrep-taint').count()
+        self.assertEqual(
+            semgrep_hits, EXPECTED_INTER_SEMGREP_FALSE_POSITIVES,
+            f'Semgrep taint가 taint_inter_safe.py에서 잡는 건수가 바뀌었습니다(기대 '
+            f'{EXPECTED_INTER_SEMGREP_FALSE_POSITIVES}, 실제 {semgrep_hits}). 이 파일의 결과는 전부 Semgrep의 알려진 '
+            f'오탐이므로, 줄었다면 Semgrep(버전 {self._semgrep_version()})이 좋아진 것이지 우리 엔진이 나빠진 것이 '
+            f'아닙니다 — docs/decisions.md 2026-09-06 custom-taint 2단계의 M을 갱신하세요.',
+        )

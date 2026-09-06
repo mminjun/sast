@@ -43,6 +43,7 @@ def analyze_directory(source_root, *, time_budget=120.0, max_file_bytes=DEFAULT_
     stats = {
         'files': 0, 'analyzed': 0, 'findings': 0,
         'skipped_excluded': 0, 'skipped_size': 0, 'skipped_budget': 0, 'parse_errors': 0,
+        'summary_passes': 0,  # 함수 요약 고정점 반복 횟수의 최대(파일 기준) — 상한에 닿았는지 보는 용도
         'seconds': 0.0,
     }
 
@@ -61,7 +62,7 @@ def analyze_directory(source_root, *, time_budget=120.0, max_file_bytes=DEFAULT_
                 stats['skipped_size'] += 1
                 continue
             source = Path(_read_path(path)).read_text(encoding='utf-8', errors='replace')
-            findings = analyze_module(source, rel_path)
+            findings = analyze_module(source, rel_path, stats)
         except SyntaxError as exc:
             stats['parse_errors'] += 1
             errors.append(f'{rel_path}: 문법 오류 (line {exc.lineno}): {exc.msg}')
