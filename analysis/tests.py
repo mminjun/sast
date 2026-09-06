@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings
+from django.test import override_settings, tag
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -734,6 +734,7 @@ class ExcludePathsExecuteTests(AnalysisTestCase):
         self.assertIn('제외 경로가 올바르지 않습니다', AnalysisRun.objects.get(pk=run_id).error_message)
         mock_run.assert_not_called()
 
+    @tag('semgrep')  # 실제 Semgrep 실행 — 평소엔 --exclude-tag=semgrep으로 건너뛴다 (CLAUDE.md)
     @skipUnless(SEMGREP_AVAILABLE, 'semgrep 바이너리가 없어 실제 제외 동작은 건너뛴다')
     def test_real_semgrep_skips_excluded_files_even_inside_a_git_repo(self):
         # 실제 Semgrep 실행: 제외된 디렉토리의 취약 코드는 결과에 나오지 않는다.

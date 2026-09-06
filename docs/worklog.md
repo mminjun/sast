@@ -447,3 +447,8 @@
   커밋 이력 없음 확인(`git log -- .env` 빈 결과). `scripts/make_selfscan_zip.py` 추가 — git 추적
   파일만 + DENY 이름 재검사, 실행 결과 170개 파일·`.env.example`만 포함. decisions에 8/27
   `.gitignore` 사고와 9/6 `--project-root` 사고를 "작업 영역이 저장소 내부" 계열로 묶어 기록
+- 테스트 실행 시간(feature/test-tags): 실제 Semgrep 시험 13개에 `@tag('semgrep')`(catalog
+  DetectionSampleTests·analysis 실제 제외 실증) → `--exclude-tag=semgrep`으로 평소엔 건너뜀. 그래도
+  313개가 405초라 실측: bcrypt 0.31초/해시 × 시험당 사용자 2~3명 = 대부분. 테스트 실행 중에만
+  MD5 해셔(settings, `sys.argv[1:2]==['test']`), SEC-001 검증 시험 2개는 override_settings로 bcrypt
+  고정. 158초 → `--parallel 4`로 56초. 전체는 577초 → 176초. CLAUDE.md에 "평소/커밋 전" 명령 기록
