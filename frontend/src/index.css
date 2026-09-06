@@ -517,6 +517,44 @@ td.truncate-sm {
   margin-left: 0.45rem;
 }
 
+/* 엔진 표시 — taint(흐름 추적) 결과에만 붙는다 */
+.badge-engine {
+  background: #ede9fe;
+  color: #6d28d9;
+  margin-left: 0.4rem;
+  font-size: 0.68rem;
+}
+
+/* 오염 경로 — 소스 → 경유 → 싱크 (코드 보기 안) */
+.taint-trace {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid #a78bfa;
+  background: #f5f3ff;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.taint-trace li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.1rem 0;
+}
+
+.taint-role {
+  min-width: 2.2rem;
+  font-weight: 600;
+  color: #6d28d9;
+}
+
+.taint-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* 0건 배지 — 형태는 유지하고 색만 옅게(심각도 색상은 남는다) */
 .badge-dim {
   opacity: 0.45;

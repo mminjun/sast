@@ -446,6 +446,8 @@ class RunFindingReingestView(RunFindingsMixin, APIView):
             # 재표준화 전 판정·직전 실행 판정에서 물려받은 건수 — 마킹이 보존됐는지
             # 응답만으로 확인할 수 있게.
             'carried': result.carried,
+            # taint 결과 중 오염 경로가 붙은 건수 — 텍스트 어댑터가 살아 있는지 응답으로 확인.
+            'traced': result.traced,
         })
 
 

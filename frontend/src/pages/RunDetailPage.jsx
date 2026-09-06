@@ -15,6 +15,30 @@ import {
 const PAGE_SIZE = 50; // 서버 FindingPagination.page_size와 동일
 const FINDING_STATUSES = Object.keys(FINDING_STATUS_LABELS); // OPEN, FALSE_POSITIVE, ACCEPTED
 
+/** 오염 경로 — 소스 → 중간 변수 → 싱크. extra.taint_trace 형식은 catalog/services.py
+ *  (자체 taint 구현도 같은 형식). 노드마다 path가 있어 파일이 달라져도 표시할 수 있다. */
+function TaintTrace({ trace }) {
+  const nodes = [
+    { role: '소스', ...trace.source },
+    ...trace.steps.map((step) => ({ role: '경유', ...step })),
+    { role: '싱크', ...trace.sink },
+  ];
+  const samePath = nodes.every((n) => n.path === trace.sink.path);
+  return (
+    <ol className="taint-trace">
+      {nodes.map((n, index) => (
+        <li key={`${n.path}:${n.line}:${index}`}>
+          <span className="taint-role">{n.role}</span>
+          <span className="mono small muted">
+            {samePath ? '' : `${n.path}:`}{n.line}행
+          </span>
+          <code className="taint-code">{n.code}</code>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 /** 관리자용 행 안 판정 편집기 — 저장하면 PATCH 응답으로 그 행만 교체한다. */
 function StatusEditor({ finding, onSaved }) {
   const [value, setValue] = useState(finding.status || 'OPEN');
@@ -318,6 +342,10 @@ export default function RunDetailPage() {
                   ) : (
                     <span className="muted">미매핑</span>
                   )}
+                  {/* 어느 엔진이 잡았나 — taint(흐름 추적) 결과만 표시한다. 패턴은 기본값이라 생략. */}
+                  {f.extra?.engine && f.extra.engine !== 'semgrep-pattern' && (
+                    <span className="badge badge-engine" title={f.extra.engine}>taint</span>
+                  )}
                   <div className="muted small">{f.rule_name}</div>
                 </td>
                 <td className="mono small truncate" title={`${f.file_path}:${f.start_line}`}>
@@ -329,6 +357,7 @@ export default function RunDetailPage() {
                     <details>
                       <summary className="muted small">코드 보기</summary>
                       <CodeSnippet finding={f} />
+                      {f.extra?.taint_trace && <TaintTrace trace={f.extra.taint_trace} />}
                     </details>
                   )}
                 </td>

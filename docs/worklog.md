@@ -481,3 +481,26 @@
   때만 사유를 보여 드러나지 않았지만 API·비교 화면의 근거가 거짓이 되는 문제). 알려진 동작: 다른
   세션(API·다른 사용자)이 올린 실행은 현재 열린 목록에 폴링으로 나타나지 않는다 — 폴링은 이미 보이는
   대기열·실행중 행이 있을 때만 돌고, 새 행은 새로고침으로 본다
+- Semgrep taint 룰(feature/taint-rules): Plan Mode로 설계 6개 판단(대상 항목·패턴 룰과의 관계·오염 경로
+  형식·엔진 표시·한계 실측·성능)을 스크래치 실측과 함께 승인받음. Python 인젝션 7항목(IV-01·02·03·04·05·
+  07·12)을 `catalog/rules/taint_python.yaml`(mode: taint)로 교체(IV-04는 Python 신규), 같은 항목의 패턴 룰
+  6개 삭제. 소스 = 함수 매개변수(self·cls 제외) + request 값 + input/argv/environ, sanitizer = int/float·
+  allowlist if·정규식 if·이름 규약(validate_/sanitize_/clean_/escape_) + 항목별. YAML 앵커로 공통 블록을
+  한 번만 적음(리스트는 이어붙일 수 없어 sanitizer를 값/검사 두 항목으로 묶음). 실측에서 잡은 것:
+  `metavariable-regex`를 pattern-either 밖에 두면 urlopen 분기가 걸러짐(9/5 함정 재현), `$P.open(...)` 싱크는
+  ZipFile.open까지 걸림(제거). 샘플: vulnerable.py에 변수 경유 7케이스(38건/22코드), safe.py에 매개변수
+  검증 8케이스(정규식·allowlist·int·basename·Path.name·shlex.quote·validate_ 헬퍼·상수만) — 0건 유지.
+  오염 경로: JSON·SARIF에 없음을 실측(Pro 전용) → `--dataflow-traces --max-lines-per-finding 0
+  --text-output=<작업 영역>/dataflow_trace.txt`로 텍스트를 받아 `catalog/taint_trace.py` 어댑터가
+  (경로, 룰 id, 싱크 줄)로 짝지어 `Finding.extra['taint_trace']`(source/steps/sink, 노드마다 path·line·code)에
+  저장. 실제 실행에서 두 번 깨졌다 — (1) Semgrep이 120칸에서 경로를 감아 작업 영역 절대경로가 두 줄로
+  나뉨(COLUMNS 무시) → 이어 붙이기 + 공백 무시 매칭, (2) 헤더 표식이 심각도별로 다름(❯❯❱/❯❱/❱)이라
+  WARNING인 IV-07이 통째로 누락 → 정규식. 두 실패 모두 "taint 결과는 있는데 경로 0건" 경고 로그가 잡아
+  줬을 유형이라 테스트로 고정. `extra['engine']`(semgrep-pattern/semgrep-taint/custom-taint 예약),
+  seed_catalog가 허용 목록 검증, 재표준화 응답에 `traced`. 화면: 항목 옆 `taint` 태그, 코드 보기 안
+  소스→경유→싱크 목록. 테스트 357개 통과(신규 18: 어댑터 7·ingest 8·시드 2·실제 Semgrep 1), build 통과.
+  성능: 패턴만 vs 최종 세트 — demo-app v3 11.8초, 도그푸딩 zip 8.2초, 저장소 11.3초(차이 없음).
+  개발 DB 실증: taint 데모 zip(run 55) 7건 전부 trace 부착·safe 파일 0건, 화면 태그 확인; 같은 demo-app-v1
+  zip을 패턴 룰(run 53)·taint 룰(run 57)로 돌려 diff → new 0/resolved 0/persisted 14(핑거프린트 안정 실증).
+  자체 저장소 도그푸딩(run 56, sast_choi_src.zip)에서 매개변수 소스의 비용 확인 — IV-03 `open(param)`
+  헬퍼 7건(decisions 기록, 오탐 판정 워크플로로 처리). Java·JS taint는 다음 브랜치

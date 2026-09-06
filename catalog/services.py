@@ -7,6 +7,7 @@ analysis 앱은 Semgrep을 돌려 raw_result(원본 JSON)까지만 책임진다.
 다시 만들 수 있다.
 """
 
+import logging
 import re
 from collections import Counter, namedtuple
 from pathlib import Path
@@ -15,13 +16,26 @@ from django.db import transaction
 from django.db.models import F, Q
 
 from analysis.models import AnalysisRun, AnalysisStatus
-from analysis.services import fs_path, source_dir, strip_extended_prefix, strip_nul
+from analysis.services import (
+    DATAFLOW_TRACE_FILE, fs_path, source_dir, strip_extended_prefix, strip_nul, workspace_dir,
+)
 
 from .fingerprint import assign_fingerprints
 from .models import DiagnosticRule, Finding, FindingStatus, Severity
 # 코드 조각 읽기 규칙(줄 수·길이 상한, 문맥)은 catalog/snippet.py 한 곳에 있다 —
 # CI 게이트(scripts/sast_gate.py)도 같은 함수로 조각을 만들어야 핑거프린트가 맞는다.
 from .snippet import read_snippet
+from .taint_trace import load_trace_file
+
+logger = logging.getLogger(__name__)
+
+# 결과를 만든 엔진 — Finding.extra['engine'] (docs/decisions.md 2026-09-06 taint).
+# 룰 YAML의 metadata.engine이 정한다(seed_catalog가 허용 목록을 검증). 없으면 한 지점 패턴.
+# custom-taint는 자체 taint 구현이 붙을 자리 — 그 결과는 같은 extra 형식(engine, taint_trace)을 쓴다.
+ENGINE_PATTERN = 'semgrep-pattern'
+ENGINE_SEMGREP_TAINT = 'semgrep-taint'
+ENGINE_CUSTOM_TAINT = 'custom-taint'
+KNOWN_ENGINES = (ENGINE_PATTERN, ENGINE_SEMGREP_TAINT, ENGINE_CUSTOM_TAINT)
 
 # 매핑에 실패했을 때만 쓰는 폴백 표 (QLT-004).
 SEMGREP_SEVERITY_FALLBACK = {
@@ -31,7 +45,8 @@ SEMGREP_SEVERITY_FALLBACK = {
 }
 
 # carried: 직전 실행·재표준화 전 판정에서 status를 물려받은 건수 (오탐 관리).
-IngestResult = namedtuple('IngestResult', 'created skipped unmapped carried')
+# traced: taint 엔진 결과 중 오염 경로(extra.taint_trace)가 붙은 건수.
+IngestResult = namedtuple('IngestResult', 'created skipped unmapped carried traced', defaults=(0,))
 
 
 def normalize_severity(rule, semgrep_severity):
@@ -130,7 +145,56 @@ def _extract_lines(source_root, relative_path, start_line, end_line):
     # 260자 넘는 경로도 읽을 수 있도록 확장 경로로 연다 (analysis.services.fs_path).
     return read_snippet(fs_path(target), start_line, end_line)
 
-def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
+def _taint_trace_for(traces, relative_path, check_id, start_line):
+    """(경로, 룰 id, 싱크 줄)로 오염 경로를 찾아 저장 형식으로 바꾼다. 없으면 None.
+
+    노드마다 path를 붙인다 — 지금은 전부 같은 파일이지만, 자체 taint 구현이 파일 간 추적을 하게
+    되면 같은 형식으로 다른 파일을 가리킬 수 있어야 한다.
+    """
+    trace = traces.get((_path_key(relative_path), check_id, start_line))
+    if trace is None:
+        return None
+
+    def with_path(node):
+        return {'path': relative_path, 'line': node['line'], 'code': node['code']}
+
+    return {
+        'source': with_path(trace['source']),
+        'steps': [with_path(step) for step in trace['steps']],
+        'sink': with_path(trace['sink']),
+    }
+
+
+def _path_key(relative_path):
+    """trace 매칭용 경로 키 — 공백을 뺀다.
+
+    Semgrep 텍스트 출력은 120칸에서 경로를 감고, 감긴 자리에 공백이 있었다면 이어 붙일 때
+    사라진다(catalog/taint_trace.py). 양쪽을 공백 없이 비교하면 그 경우에도 짝지어진다.
+    """
+    return re.sub(r'\s+', '', relative_path or '')
+
+
+def _load_traces(run, source_root):
+    """작업 영역의 텍스트 출력에서 오염 경로를 읽어 (상대경로, 룰 id, 싱크 줄) 키로 정리한다.
+
+    텍스트의 경로는 Semgrep에 넘긴 형태(확장 절대경로)라 결과 JSON과 같은 규칙(_relative_path)으로
+    격리 루트 기준 상대경로로 맞춘다. 파일이 없거나 형식이 다르면 빈 dict — 실패해도 탐지 결과
+    저장은 계속된다. 반환: (traces, 파일 존재 여부).
+    """
+    trace_path = workspace_dir(run) / DATAFLOW_TRACE_FILE
+    exists = trace_path.exists()
+    if not exists:
+        return {}, False
+    normalized = {}
+    for (raw_path, check_id, sink_line), trace in load_trace_file(fs_path(trace_path)).items():
+        relative_path = _relative_path(raw_path, source_root)
+        if relative_path is None:
+            continue
+        normalized[(_path_key(relative_path), check_id, sink_line)] = trace
+    return normalized, True
+
+
+def _build_finding(item, run, rules_by_code, source_root, snippet_cache, traces):
     """Semgrep 결과 1건을 Finding으로 바꾼다. 저장하지 않을 결과면 None."""
     relative_path = _relative_path(item.get('path'), source_root)
     if relative_path is None:
@@ -140,6 +204,8 @@ def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
     metadata = extra.get('metadata') or {}
     kisa_code = metadata.get('kisa_code') or ''
     rule = rules_by_code.get(kisa_code)
+    engine = metadata.get('engine') or ENGINE_PATTERN
+    check_id = bare_check_id(item.get('check_id'))
 
     start_line = (item.get('start') or {}).get('line') or 0
     end_line = (item.get('end') or {}).get('line') or start_line
@@ -147,6 +213,23 @@ def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
     snippet, context = _read_snippet(
         source_root, relative_path, start_line, end_line, snippet_cache
     )
+    finding_extra = {
+        'cwe': metadata.get('cwe', ''),
+        'kisa_name': metadata.get('kisa_name', ''),
+        # 도구가 원래 뭐라고 했는지 남긴다 — 최종 등급이 카탈로그에서 왔다는 것을
+        # 결과만 보고도 대조할 수 있어야 한다 (QLT-004).
+        'semgrep_severity': semgrep_severity,
+        # 표시용 문맥(취약 줄 앞뒤). 핑거프린트는 code_snippet만 보므로 여기 값이
+        # 달라져도 실행 간 매칭에는 영향이 없다.
+        'context': context,
+        # 어느 엔진이 잡았나 (semgrep-pattern / semgrep-taint / custom-taint).
+        'engine': engine,
+    }
+    # 오염 경로는 taint 엔진 결과에만, 그리고 찾았을 때만 붙인다 — 키가 없으면 "경로 없음".
+    if engine != ENGINE_PATTERN:
+        trace = _taint_trace_for(traces, relative_path, check_id, start_line)
+        if trace is not None:
+            finding_extra['taint_trace'] = trace
 
     return Finding(
         run=run,
@@ -156,22 +239,13 @@ def _build_finding(item, run, rules_by_code, source_root, snippet_cache):
         rule_code=rule.code if rule else kisa_code,
         rule_name=rule.name if rule else '',
         severity=normalize_severity(rule, semgrep_severity),
-        semgrep_check_id=bare_check_id(item.get('check_id')),
+        semgrep_check_id=check_id,
         file_path=relative_path,
         start_line=start_line,
         end_line=end_line,
         message=strip_nul(extra.get('message') or ''),
         code_snippet=snippet,
-        extra={
-            'cwe': metadata.get('cwe', ''),
-            'kisa_name': metadata.get('kisa_name', ''),
-            # 도구가 원래 뭐라고 했는지 남긴다 — 최종 등급이 카탈로그에서 왔다는 것을
-            # 결과만 보고도 대조할 수 있어야 한다 (QLT-004).
-            'semgrep_severity': semgrep_severity,
-            # 표시용 문맥(취약 줄 앞뒤). 핑거프린트는 code_snippet만 보므로 여기 값이
-            # 달라져도 실행 간 매칭에는 영향이 없다.
-            'context': context,
-        },
+        extra=finding_extra,
     )
 
 
@@ -261,12 +335,27 @@ def ingest_findings(run):
     # 수집 1회 동안만 유지되는 조각 캐시 — 같은 줄에 여러 룰이 걸린 경우 파일을
     # 반복해서 열지 않는다.
     snippet_cache = {}
+    traces, trace_file_exists = _load_traces(run, source_root)
     for item in results:
-        finding = _build_finding(item, run, rules_by_code, source_root, snippet_cache)
+        finding = _build_finding(item, run, rules_by_code, source_root, snippet_cache, traces)
         if finding is None:
             skipped += 1
             continue
         findings.append(finding)
+
+    # 오염 경로는 부가정보라 없어도 저장은 계속되지만, "taint 결과는 있는데 경로가 하나도 안
+    # 붙음"은 텍스트 형식이 바뀌었거나(Semgrep 버전) 실행이 텍스트를 안 남긴 것이라 조용히
+    # 지나가면 안 된다 — 경고로 드러낸다 (docs/decisions.md 2026-09-06 taint).
+    taint_total = sum(1 for f in findings if f.extra.get('engine') != ENGINE_PATTERN)
+    traced = sum(1 for f in findings if 'taint_trace' in f.extra)
+    if taint_total and not traced:
+        logger.warning(
+            '오염 경로가 한 건도 붙지 않았습니다 (run=%s, taint 결과 %d건, trace 파일 %s). '
+            'Semgrep 텍스트 출력 형식이 바뀌었는지(catalog/taint_trace.py) 확인하세요.',
+            run.pk, taint_total, '있음' if trace_file_exists else '없음',
+        )
+    elif taint_total and traced < taint_total:
+        logger.info('오염 경로 일부만 붙음 (run=%s): %d/%d건', run.pk, traced, taint_total)
 
     # diff 매칭 키. run 단위·결정적 계산이라 재수집해도 같은 값이 나온다(멱등성 유지).
     assign_fingerprints(findings)
@@ -287,6 +376,7 @@ def ingest_findings(run):
     unmapped = sum(1 for finding in findings if finding.rule_id is None)
     return IngestResult(
         created=len(findings), skipped=skipped, unmapped=unmapped, carried=carried,
+        traced=traced,
     )
 
 

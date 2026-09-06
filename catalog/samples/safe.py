@@ -9,7 +9,9 @@ import logging
 import os
 import pickle
 import random
+import re
 import secrets
+import shlex
 import ssl
 import subprocess
 import tempfile
@@ -21,8 +23,9 @@ import requests
 import yaml
 from Crypto.PublicKey import RSA
 from cryptography.hazmat.primitives.asymmetric import rsa
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect
+from django.utils.html import escape
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,8 @@ ALLOWED_NEXT = {"/dashboard", "/projects"}
 DEBUG = os.getenv("DJANGO_DEBUG", "").lower() == "true"
 
 ALLOWED_HOSTS = {"api.example.com"}
+ALLOWED_TABLES = {"users", "orders"}
+LOCALHOST = "127.0.0.1"
 REPORT_ROOT = Path("/var/reports").resolve()
 
 
@@ -185,6 +190,70 @@ def make_signing_key():
 
 def make_tls_key():
     return rsa.generate_private_key(public_exponent=65537, key_size=4096)
+
+
+# --- taint 오탐 통제 (taint_python.yaml) ---
+# 매개변수를 외부 입력으로 보는 룰이라, "매개변수를 받지만 안에서 검증한 뒤 쓰는" 함수가 걸리면
+# 안 된다. 검증 형태(정규식·allowlist·타입 변환·파일명 추출·인용·검증 헬퍼)별로 하나씩 둔다.
+
+
+def ping_local():
+    target = LOCALHOST
+    os.system("ping -c 1 " + target)  # 상수만 흐른다 — 입력이 없다
+
+
+def ping_host_checked(host):
+    # 정규식으로 허용 문자만 통과시킨 뒤 사용
+    if not re.fullmatch(r"[a-z0-9.-]+", host):
+        raise ValueError("잘못된 호스트")
+    os.system("ping -c 1 " + host)
+
+
+def query_table(conn, table):
+    # 식별자는 바인딩할 수 없으므로 allowlist로 제한
+    if table not in ALLOWED_TABLES:
+        raise ValueError("허용되지 않은 테이블")
+    conn.cursor().execute("SELECT * FROM " + table)
+
+
+def scan_port(host, port):
+    # 정수로 변환한 값만 명령에 들어간다
+    number = int(port)
+    os.system(f"nc -z {LOCALHOST} {number}")
+
+
+def read_upload(name):
+    # 파일 이름만 남기면 상위 디렉토리로 나갈 수 없다
+    safe_name = os.path.basename(name)
+    return open(os.path.join("/var/uploads", safe_name), "rb").read()
+
+
+def read_by_name(name):
+    safe_name = Path(name).name
+    return (REPORT_ROOT / safe_name).read_text(encoding="utf-8")
+
+
+def ping_quoted(host):
+    # 셸 인용 처리
+    quoted = shlex.quote(host)
+    os.system("ping -c 1 " + quoted)
+
+
+def validate_host(host):
+    if host not in ALLOWED_HOSTS:
+        raise ValueError("허용되지 않은 호스트")
+    return host
+
+
+def fetch_via_helper(target):
+    # 검증을 헬퍼로 뺀 형태 — 이름 규약(validate_*)으로 신뢰한다
+    host = validate_host(target)
+    return requests.get("https://" + host + "/preview", timeout=5)
+
+
+def greet(request):
+    name = request.GET.get("name", "")
+    return HttpResponse("<h1>Hello " + escape(name) + "</h1>")  # 이스케이프 뒤 출력
 
 
 def do_work():

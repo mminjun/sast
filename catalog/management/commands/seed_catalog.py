@@ -25,6 +25,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from catalog.models import DiagnosticRule, KisaCategory, Severity
+from catalog.services import KNOWN_ENGINES
 
 VALID_CATEGORIES = set(KisaCategory.values)
 VALID_SEVERITIES = set(Severity.values)
@@ -131,6 +132,14 @@ class Command(BaseCommand):
                     raise CommandError(
                         f'{path.name}: 룰 {rule_id}에 metadata.kisa_code가 없습니다 — '
                         '카탈로그 항목에 연결되지 않는 룰은 결과를 표준화할 수 없습니다.'
+                    )
+                # 결과의 extra.engine이 되는 값 — 오타가 그대로 결과에 실리지 않게 허용 목록으로
+                # 막는다 (없으면 semgrep-pattern). taint 룰은 semgrep-taint를 적는다.
+                engine = (rule.get('metadata') or {}).get('engine')
+                if engine is not None and engine not in KNOWN_ENGINES:
+                    raise CommandError(
+                        f'{path.name}: 룰 {rule_id}의 metadata.engine={engine!r} — '
+                        f'{", ".join(KNOWN_ENGINES)} 중 하나여야 합니다.'
                     )
                 mapping.setdefault(kisa_code, []).append(rule_id)
 
