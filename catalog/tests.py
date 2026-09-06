@@ -20,6 +20,8 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+
+import yaml
 from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -36,7 +38,9 @@ from rest_framework.test import APIClient, APITestCase
 
 from accounts.models import Role
 from analysis.models import AnalysisRun, AnalysisStatus
-from analysis.services import DATAFLOW_TRACE_FILE, fs_path, run_semgrep, source_dir, workspace_dir
+from analysis.services import (
+    DATAFLOW_TRACE_FILE, execute_analysis, fs_path, run_semgrep, source_dir, workspace_dir,
+)
 from analysis.signals import run_succeeded
 from projects.models import Project, ProjectMember
 
@@ -1167,7 +1171,7 @@ class SignalWiringTests(WorkspaceMixin, TestCase):
         with patch('analysis.services.subprocess.run') as mocked:
             mocked.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout=self.semgrep_stdout(run), stderr='')
-            run_semgrep(run)
+            execute_analysis(run)
 
         run.refresh_from_db()
         self.assertEqual(run.status, AnalysisStatus.SUCCEEDED)
@@ -1178,7 +1182,7 @@ class SignalWiringTests(WorkspaceMixin, TestCase):
         with patch('analysis.services.subprocess.run') as mocked:
             mocked.return_value = subprocess.CompletedProcess(
                 args=[], returncode=2, stdout='', stderr='config error')
-            run_semgrep(run)
+            execute_analysis(run)
 
         run.refresh_from_db()
         self.assertEqual(run.status, AnalysisStatus.FAILED)
@@ -1192,7 +1196,7 @@ class SignalWiringTests(WorkspaceMixin, TestCase):
                 mocked.return_value = subprocess.CompletedProcess(
                     args=[], returncode=0, stdout=self.semgrep_stdout(run), stderr='')
                 with self.assertLogs('catalog.receivers', level='ERROR'):
-                    run_semgrep(run)
+                    execute_analysis(run)
 
         run.refresh_from_db()
         self.assertEqual(run.status, AnalysisStatus.SUCCEEDED)
@@ -1235,7 +1239,7 @@ class DetectionSampleTests(WorkspaceMixin, TestCase):
         for name in sample_names:
             self.write_source(run, f'src/{name}',
                               (SAMPLES_DIR / name).read_text(encoding='utf-8'))
-        run_semgrep(run)
+        execute_analysis(run)
         run.refresh_from_db()
         return run
 
@@ -1257,9 +1261,11 @@ class DetectionSampleTests(WorkspaceMixin, TestCase):
         self.assertEqual(
             list(Finding.objects.filter(run=run).values_list('file_path', 'rule_code')), [])
 
+    @override_settings(ANALYSIS_CUSTOM_TAINT_ENABLED=False)
     def test_taint_findings_carry_engine_and_trace_from_real_output(self):
         """실제 Semgrep 텍스트 출력에서 오염 경로가 붙는다 — 변수 경유 케이스의 줄 번호까지 맞아야
-        어댑터(catalog/taint_trace.py)가 이 버전의 형식을 읽고 있는 것이다."""
+        어댑터(catalog/taint_trace.py)가 이 버전의 형식을 읽고 있는 것이다. 자체 엔진은 끈다 — 켜면 병합이
+        자체 엔진의 경로를 남겨 어댑터가 검증되지 않는다(병합은 CustomTaintParityTests가 본다)."""
         run = self.analyze('vulnerable.py')
         self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
         source = (SAMPLES_DIR / 'vulnerable.py').read_text(encoding='utf-8').splitlines()
@@ -2292,3 +2298,235 @@ class SeedEngineValidationTests(TestCase):
         ))
         with override_settings(CATALOG_RULES_DIR=rules_dir):
             call_command('seed_catalog', '--dry-run')
+
+
+# ---------------------------------------------------------------------------
+# 자체 taint 엔진 결과 병합 (docs/decisions.md 2026-09-06 custom-taint 판단 5·6)
+# ---------------------------------------------------------------------------
+
+def custom_result_item(path, kisa_code, line, source_line=None, steps=()):
+    """analysis/taint/report.py가 만드는 item 모양."""
+    rel = 'app.py'
+    return {
+        'check_id': f'custom-taint-{kisa_code.lower()}',
+        'path': str(path),
+        'start': {'line': line},
+        'end': {'line': line},
+        'extra': {
+            'message': 'm', 'severity': 'ERROR',
+            'metadata': {'kisa_code': kisa_code, 'cwe': 'CWE-000', 'engine': 'custom-taint'},
+            'taint_trace': {
+                'source': {'path': rel, 'line': source_line or line - 1, 'code': 'def f(x):'},
+                'steps': [{'path': rel, 'line': s, 'code': f'step{s}'} for s in steps],
+                'sink': {'path': rel, 'line': line, 'code': 'sink(x)'},
+            },
+        },
+    }
+
+
+class EngineMergeTests(WorkspaceMixin, TestCase):
+    """Semgrep 결과와 자체 taint 결과를 (KISA 코드, 파일, 싱크 줄)로 병합 — 겹치면 자체 엔진 것을 남긴다."""
+
+    def setUp(self):
+        super().setUp()
+        seed()
+        self.setup_workspace()
+        self.admin = User.objects.create_user(
+            email='admin@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        self.project = Project.objects.create(name='p', created_by=self.admin)
+        self.run = self.make_run(self.project, self.admin)
+        self.target = self.write_source(self.run, 'app.py', 'def f(x):\n    y = x\n    sink(y)\n')
+
+    def _semgrep_taint(self, line=3, kisa_code='KISA-IV-05'):
+        item = semgrep_result(self.target, kisa_code, line=line,
+                              check_id=f'catalog.rules.{kisa_code.lower()}-taint')
+        item['extra']['metadata']['engine'] = 'semgrep-taint'
+        return item
+
+    def ingest(self, semgrep_items, custom_items=None):
+        self.run.raw_result = {'results': semgrep_items}
+        self.run.custom_result = {'results': custom_items, 'errors': [], 'stats': {'analyzed': 1}} if custom_items is not None else None
+        self.run.save(update_fields=['raw_result', 'custom_result'])
+        return ingest_findings(self.run)
+
+    def test_same_line_from_both_engines_becomes_one_custom_finding(self):
+        self.ingest([self._semgrep_taint()], [custom_result_item(self.target, 'KISA-IV-05', 3, steps=[2])])
+
+        finding = Finding.objects.get(run=self.run)
+        self.assertEqual(finding.extra['engine'], 'custom-taint')
+        self.assertEqual(finding.extra['engines'], ['custom-taint', 'semgrep-taint'])
+        self.assertEqual([s['line'] for s in finding.extra['taint_trace']['steps']], [2])
+        self.run.refresh_from_db()
+        self.assertEqual(
+            {k: self.run.custom_result['stats'][k] for k in ('semgrep_only', 'custom_only', 'both')},
+            {'semgrep_only': 0, 'custom_only': 0, 'both': 1},
+        )
+
+    def test_merged_fingerprint_equals_semgrep_only_fingerprint(self):
+        # 어느 엔진 것을 남기든 핑거프린트(코드|경로|조각)는 같다 — 이전 실행과의 diff·판정 승계 불변.
+        self.ingest([self._semgrep_taint()])
+        before = Finding.objects.get(run=self.run).fingerprint
+        self.ingest([self._semgrep_taint()], [custom_result_item(self.target, 'KISA-IV-05', 3)])
+        self.assertEqual(Finding.objects.get(run=self.run).fingerprint, before)
+
+    def test_custom_only_finding_is_added_with_its_trace(self):
+        self.ingest([], [custom_result_item(self.target, 'KISA-IV-05', 3, source_line=1, steps=[2])])
+        finding = Finding.objects.get(run=self.run)
+        self.assertEqual(finding.extra['engine'], 'custom-taint')
+        self.assertNotIn('engines', finding.extra)
+        self.assertEqual(finding.extra['taint_trace']['source']['line'], 1)
+        self.assertEqual(finding.rule_code, 'KISA-IV-05')
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.custom_result['stats']['custom_only'], 1)
+
+    def test_semgrep_only_is_counted_and_warned(self):
+        # 자체 엔진이 놓친 Semgrep taint 결과 — 함수 내 동등성 회귀 신호.
+        with self.assertLogs('catalog.services', level='WARNING') as logs:
+            self.ingest([self._semgrep_taint()], [])
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.custom_result['stats']['semgrep_only'], 1)
+        self.assertEqual(self.run.custom_result['stats']['semgrep_only_samples'], ['app.py:3'])
+        self.assertTrue(any('자체 taint 엔진이 놓친' in line for line in logs.output))
+        self.assertEqual(Finding.objects.filter(run=self.run).count(), 1)
+
+    def test_pattern_findings_do_not_count_as_semgrep_only(self):
+        with self.assertNoLogs('catalog.services', level='WARNING'):
+            self.ingest([semgrep_result(self.target, 'KISA-SF-06', line=3)], [])
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.custom_result['stats']['semgrep_only'], 0)
+
+    def test_different_code_or_line_is_not_merged(self):
+        self.ingest(
+            [self._semgrep_taint(line=3)],
+            [custom_result_item(self.target, 'KISA-IV-05', 2), custom_result_item(self.target, 'KISA-IV-01', 3)],
+        )
+        self.assertEqual(Finding.objects.filter(run=self.run).count(), 3)
+
+    def test_no_custom_result_keeps_ingest_unchanged(self):
+        result = self.ingest([self._semgrep_taint()], None)
+        self.assertEqual(result.created, 1)
+        self.run.refresh_from_db()
+        self.assertIsNone(self.run.custom_result)
+
+    def test_reingest_is_idempotent_with_merge(self):
+        items = [self._semgrep_taint()]
+        custom = [custom_result_item(self.target, 'KISA-IV-05', 3)]
+        self.ingest(items, custom)
+        self.ingest(items, custom)
+        self.assertEqual(Finding.objects.filter(run=self.run).count(), 1)
+
+
+class SpecMatchesSemgrepTaintRulesTests(SimpleTestCase):
+    """자체 스펙(analysis/taint/spec.py)과 taint_python.yaml이 어긋나지 않는지 — 두 곳을 한 시험이 지킨다."""
+
+    CALL_RE = re.compile(r'([\w.$*]+)\(')
+
+    @classmethod
+    def _yaml_rules(cls):
+        path = settings.CATALOG_RULES_DIR / 'taint_python.yaml'
+        return yaml.safe_load(path.read_text(encoding='utf-8'))['rules']
+
+    @staticmethod
+    def _normalize(name):
+        """Semgrep 패턴 이름 → 스펙 표기: `$C.execute` → `*.execute`, `$CONN.ops.quote_name` → `*.quote_name`
+        (스펙의 `*.x`는 끝 이름 일치), `subprocess.$FUNC` → `subprocess.*`, `requests.$METHOD` → `requests.*`."""
+        parts = name.split('.')
+        if len(parts) >= 2 and parts[0].startswith('$'):
+            return '*.' + parts[-1]
+        if parts[-1].startswith('$'):
+            return '.'.join(parts[:-1]) + '.*'
+        return name
+
+    def _names(self, block):
+        text = yaml.safe_dump(block, allow_unicode=True)
+        names = {self._normalize(n) for n in self.CALL_RE.findall(text)}
+        # 메타변수만 남은 이름($F → 이름 규약 자리)과 정규식 조각(`.*`)은 호출 이름이 아니다
+        return {n for n in names if '$' not in n and re.search(r'\w', n) and n not in ('def', '*.*')}
+
+    def test_sinks_agree_per_kisa_code(self):
+        from analysis.taint import spec as taint_spec
+        for rule in self._yaml_rules():
+            code = rule['metadata']['kisa_code']
+            yaml_names = self._names(rule['pattern-sinks'])
+            spec_names = set()
+            for sink in taint_spec.SINKS:
+                if sink.kisa_code != code:
+                    continue
+                # requests.get 등은 YAML에서 `requests.$METHOD` 하나로 적힌다
+                head, _, tail = sink.call.rpartition('.')
+                spec_names.add(sink.call if tail not in taint_spec.SINK_METHOD_FAMILIES else f'{head}.*')
+            self.assertEqual(spec_names, yaml_names, code)
+
+    def test_sanitizers_agree_per_kisa_code(self):
+        from analysis.taint import spec as taint_spec
+        common = {'int', 'float'}
+        for rule in self._yaml_rules():
+            code = rule['metadata']['kisa_code']
+            yaml_names = set()
+            for block in rule['pattern-sanitizers']:
+                yaml_names |= self._names(block)
+            # 공통 블록(int/float·정규식 가드·이름 규약)과 검사 가드는 스펙에서 다른 자리에 있다
+            yaml_names -= common | {'re.*'} | set(taint_spec.GUARD_CALLS)
+            yaml_names -= {f'*.{method}' for method in taint_spec.GUARD_METHODS}
+            spec_names = {s.call for s in taint_spec.SANITIZERS if s.kisa_code == code and not s.attribute}
+            self.assertEqual(spec_names, yaml_names, code)
+            for attr in (s.call for s in taint_spec.SANITIZERS if s.kisa_code == code and s.attribute):
+                # 속성 sanitizer(`$P.name`)는 호출이 아니라 텍스트로 확인한다
+                self.assertIn('$P' + attr[1:], yaml.safe_dump(rule['pattern-sanitizers'], allow_unicode=True), attr)
+
+    def test_sources_and_name_prefixes_agree(self):
+        from analysis.taint import spec as taint_spec
+        text = (settings.CATALOG_RULES_DIR / 'taint_python.yaml').read_text(encoding='utf-8')
+        for call in taint_spec.SOURCE_CALLS + taint_spec.SOURCE_NAMES:
+            self.assertIn(call, text, call)
+        for prefix in taint_spec.SANITIZER_NAME_PREFIXES:
+            self.assertIn(prefix.rstrip('_'), text, prefix)
+        for guard in (*taint_spec.GUARD_CALLS, *taint_spec.GUARD_METHODS, *taint_spec.GUARD_REGEX_FUNCTIONS):
+            self.assertIn(guard, text, guard)
+
+
+@tag('semgrep')
+@unittest.skipUnless(SEMGREP_AVAILABLE, 'semgrep 바이너리가 없어 건너뜀')
+@override_settings(ANALYSIS_SEMGREP_CONFIG=str(settings.CATALOG_RULES_DIR))
+class CustomTaintParityTests(WorkspaceMixin, TestCase):
+    """1단계 종료 기준 (a): 함수 내에서 자체 엔진과 Semgrep taint가 같은 것을 잡는다."""
+
+    def setUp(self):
+        super().setUp()
+        seed()
+        self.setup_workspace()
+        self.admin = User.objects.create_user(
+            email='admin@example.com', password=PASSWORD, role=Role.ADMIN,
+        )
+        self.project = Project.objects.create(name='p', created_by=self.admin)
+
+    def analyze(self, name):
+        run = self.make_run(self.project, self.admin, status_value=AnalysisStatus.RUNNING)
+        self.write_source(run, f'src/{name}', (SAMPLES_DIR / name).read_text(encoding='utf-8'))
+        execute_analysis(run)
+        run.refresh_from_db()
+        return run
+
+    def test_vulnerable_sample_parity(self):
+        run = self.analyze('vulnerable.py')
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+        stats = run.custom_result['stats']
+        self.assertEqual(stats['semgrep_only'], 0, stats)
+        self.assertEqual(stats['custom_only'], 0, stats)
+        self.assertEqual(stats['both'], 15)
+        self.assertEqual(run.custom_result['errors'], [])
+        # 병합 뒤에도 기대 건수표는 그대로 — 같은 줄이 두 번 집계되지 않는다
+        counts = {}
+        for finding in Finding.objects.filter(run=run):
+            counts[finding.rule_code] = counts.get(finding.rule_code, 0) + 1
+        self.assertEqual(counts, EXPECTED_SAMPLE_FINDINGS)
+        merged = Finding.objects.filter(run=run, extra__engine='custom-taint')
+        self.assertEqual(merged.count(), 15)
+        self.assertTrue(all(f.extra.get('engines') == ['custom-taint', 'semgrep-taint'] for f in merged))
+
+    def test_safe_sample_parity(self):
+        run = self.analyze('safe.py')
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED, run.error_message)
+        self.assertEqual(run.custom_result['results'], [])
+        self.assertEqual(Finding.objects.filter(run=run).count(), 0)

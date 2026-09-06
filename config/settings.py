@@ -282,6 +282,13 @@ TASKS = {
 # 이 여유를 더한 시간보다 오래된 RUNNING은 워커 시작 시 FAILED로 정리한다 (services.reap_stale_runs).
 ANALYSIS_STALE_RUN_GRACE = int(os.getenv('ANALYSIS_STALE_RUN_GRACE', '300'))
 
+# 자체 taint 엔진 (analysis/taint — docs/decisions.md 2026-09-06 custom-taint)
+# Semgrep이 끝난 뒤 같은 워커 작업 안에서 돈다. best-effort — 예외·예산 초과는 run을 실패시키지 않고
+# custom_result.errors에 남는다. 끄면 Semgrep 결과만으로 표준화한다.
+ANALYSIS_CUSTOM_TAINT_ENABLED = _env_bool('ANALYSIS_CUSTOM_TAINT_ENABLED', default=True)
+# 초 — 예산을 넘기면 남은 파일을 건너뛰고 stats.skipped_budget에 적는다.
+ANALYSIS_CUSTOM_TAINT_TIMEOUT = int(os.getenv('ANALYSIS_CUSTOM_TAINT_TIMEOUT', '120'))
+
 # 분석 대상 언어 파일 확장자. 카탈로그 룰이 다루는 언어(Python: .py, C: .c/.h,
 # Java: .java, JavaScript/TypeScript: .js/.jsx/.ts/.tsx)와 맞춘다 — 다른 언어 룰을
 # 추가하면 여기도 함께 갱신한다 (SFR-011, SFR-012, TST-008).

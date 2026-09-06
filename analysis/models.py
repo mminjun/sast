@@ -64,6 +64,10 @@ class AnalysisRun(models.Model):
     # Semgrep --json 원본 출력. 표준화(KISA 49개 매핑)는 catalog 앱의 책임 —
     # 여기서는 있는 그대로 보관만 한다 (SFR-014, DAR-006은 이 앱 범위 밖).
     raw_result = models.JSONField('분석 결과(원본)', null=True, blank=True)
+    # 자체 taint 엔진(analysis/taint) 결과 — {results: [Semgrep 모양 item], errors, stats}. raw_result는
+    # "Semgrep 원본 그대로"라 섞지 않는다. 표준화가 두 결과를 합쳐 Finding으로 만들고, 병합 통계
+    # (semgrep_only 등)를 stats에 덧붙인다 (docs/decisions.md 2026-09-06 custom-taint).
+    custom_result = models.JSONField('자체 taint 결과', null=True, blank=True)
     error_message = models.TextField('오류 메시지', blank=True)
 
     created_at = models.DateTimeField('생성 일시', auto_now_add=True)

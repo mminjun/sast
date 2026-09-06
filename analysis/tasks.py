@@ -14,7 +14,7 @@ from django.tasks import task
 from django.utils import timezone
 
 from .models import AnalysisRun, AnalysisStatus
-from .services import run_semgrep, start_run
+from .services import execute_analysis, start_run
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ def run_analysis(run_id):
         return
 
     try:
-        run_semgrep(run)
+        execute_analysis(run)
     except Exception as exc:
         # run_semgrep은 예상한 실패(타임아웃·exit≠0·대상 없음)를 스스로 FAILED로 기록한다.
         # 여기 오는 것은 예상 밖 예외(JSON 파싱, 파일시스템 등)다 — RUNNING에 고착되지 않게

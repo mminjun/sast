@@ -512,3 +512,15 @@
   run 59: FALSE_POSITIVE 48건 전부 승계, diff new 0/resolved 0/persisted 69. PR #11 게이트 첫 실행은
   신규 파일 `taint_trace.py`의 `open(file_path)`가 '신규 HIGH'로 잡혀 차단 → 파일 읽기를 ingest로 옮기고
   `is_relative_to` 격리 검사 추가(자체 저장소 IV-03 6건 유지, 신규 0)
+- 자체 taint 분석 1단계(feature/custom-taint): Plan Mode로 설계 7개 판단(구조·정의 출처·오염 상태·순회·결과
+  형식·Semgrep과의 중복·단계 분할)을 프로토타입 실측과 함께 승인받고 함수 내 단계를 구현. `analysis/taint/`
+  (Django 비의존, `ast`만): `spec.py`(선언적 소스·싱크·sanitizer·가드), `state.py`(접근 경로 → Taint, 경로 노드
+  동반), `python_analyzer.py`(환경을 넘기는 자체 순회, 경로 비민감 합집합, `LOOP_PASSES`=2), `report.py`
+  (Semgrep 모양 item + taint_trace), `engine.py`(디렉토리·예산·크기·제외·best-effort). `execute_analysis` =
+  Semgrep → 자체 엔진 → 시그널, `AnalysisRun.custom_result`(0004), 표준화가 (코드·파일·줄)로 병합해 겹치면
+  custom-taint를 남기고 `engines` 기록, `stats.semgrep_only`(회귀 신호, 경고 로그·API `custom_taint_stats`).
+  스펙↔YAML 정합성 시험. 동등성: `vulnerable.py` both 15·semgrep_only 0·custom_only 0, `safe.py` 0. 자체 저장소
+  도그푸딩에서 첫 판이 6건 중 1건만 잡음 → 호출 순회가 "식 자체가 호출"(`with open(p)`)을 빠뜨린 결함 발견·수정
+  후 6건 일치. 루프 상한은 2에서 3으로(사용자 판단: 비용 0·미탐 우선) — 3단계 체인 잡힘·4단계 못 잡음을 시험으로
+  고정하고 고정점까지 안 간 이유와 함께 decisions에 기록. 테스트: 신규 40(전파 7·sanitizer 4·제어 흐름 6·엔진 4·
+  파이프라인 6·병합 8·정합성 3·동등성 2 — 실제 Semgrep 2 포함)

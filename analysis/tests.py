@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import textwrap
 import zipfile
 from datetime import timedelta
 from pathlib import Path
@@ -28,7 +29,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.tasks import default_task_backend
-from django.test import override_settings, tag
+from django.test import SimpleTestCase, override_settings, tag
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -39,9 +40,12 @@ from projects.models import Project, ProjectMember
 
 from .models import AnalysisRun, AnalysisStatus
 from .services import (
-    DATAFLOW_TRACE_FILE, STALE_RUN_MESSAGE, fs_path, mark_queued, reap_stale_runs, source_dir,
+    DATAFLOW_TRACE_FILE, STALE_RUN_MESSAGE, execute_analysis, fs_path, mark_queued, reap_stale_runs,
+    source_dir, start_run,
     workspace_dir,
 )
+from .taint import analyze_directory, analyze_source
+from .taint.python_analyzer import LOOP_PASSES
 from .tasks import run_analysis
 
 User = get_user_model()
@@ -1018,7 +1022,7 @@ class RunAnalysisTaskTests(AnalysisTestCase):
         # run_semgrep이 스스로 처리하지 못한 예외는 RUNNING 고착 대신 FAILED로 남기고,
         # 큐 쪽 작업 행에도 traceback이 기록되도록 다시 올린다.
         run = self._queued_run()
-        with patch('analysis.tasks.run_semgrep', side_effect=RuntimeError('disk gone')):
+        with patch('analysis.services.run_semgrep', side_effect=RuntimeError('disk gone')):
             with self.assertRaises(RuntimeError):
                 run_analysis.call(run.pk)
 
@@ -1124,3 +1128,440 @@ class WorkerCommandTests(APITransactionTestCase):
         self.assertEqual(stale.status, AnalysisStatus.FAILED)
         self.assertEqual(stale.error_message, STALE_RUN_MESSAGE)
         mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 자체 taint 엔진 — 1단계 함수 내 (docs/decisions.md 2026-09-06 custom-taint)
+# ---------------------------------------------------------------------------
+
+def _sinks(source):
+    """소스 텍스트를 분석해 {(KISA 코드 끝 두 자리, 싱크 줄)} — 시험용 축약."""
+    return {(f.kisa_code[-5:], f.sink['line']) for f in analyze_source(textwrap.dedent(source), 'app.py')}
+
+
+def _traces(source):
+    return {f.sink['line']: f for f in analyze_source(textwrap.dedent(source), 'app.py')}
+
+
+class CustomTaintPropagationTests(SimpleTestCase):
+    """전파 형태·소스 종류 — Django 없이 엔진만 (analysis/taint는 Django를 import하지 않는다)."""
+
+    def test_variable_hops_and_trace(self):
+        source = '''
+            import os
+            def f(host):
+                cmd = "ping " + host
+                line = cmd + " -c 1"
+                os.system(line)
+        '''
+        finding = _traces(source)[6]
+        self.assertEqual(finding.kisa_code, 'KISA-IV-05')
+        self.assertEqual(finding.taint.kind, 'param')
+        self.assertEqual(finding.taint.source['line'], 3)
+        self.assertEqual([s['line'] for s in finding.taint.steps], [4, 5])
+        self.assertEqual(finding.sink['code'], 'os.system(line)')
+
+    def test_formatting_forms_propagate(self):
+        source = '''
+            import os
+            def a(h): os.system(f"ping {h}")
+            def b(h): os.system("ping %s" % h)
+            def c(h): os.system("ping {}".format(h))
+            def d(h): os.system(" ".join(["ping", h]))
+            def e(h): os.system(str(h).strip().lower())
+            def g(h): os.system({"k": h}["k"])
+            def i(h): os.system(h if h else "x")
+        '''
+        self.assertEqual({line for _, line in _sinks(source)}, {3, 4, 5, 6, 7, 8, 9})
+
+    def test_constants_and_list_args_are_not_flagged(self):
+        source = '''
+            import os, subprocess
+            LOCAL = "127.0.0.1"
+            def a():
+                target = LOCAL
+                os.system("ping " + target)
+            def b(n):
+                os.system(f"ping -c {3} localhost")
+            def c(host):
+                subprocess.run(["ping", host])
+            def d(host):
+                subprocess.run(["ping", host], shell=True)
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 12)})
+
+    def test_request_inputs_are_input_sources_even_via_parameter(self):
+        source = '''
+            def a(request, cur):
+                q = request.GET.get("q")
+                cur.execute("SELECT " + q)
+            def b(request, cur):
+                cur.execute(request.POST["q"])
+            def c(request):
+                exec(request.body)
+        '''
+        traces = _traces(source)
+        self.assertEqual({k: v.taint.kind for k, v in traces.items()}, {4: 'input', 6: 'input', 8: 'input'})
+        self.assertEqual(traces[4].taint.source['line'], 3)
+
+    def test_process_inputs_are_sources(self):
+        source = '''
+            import os, sys
+            def a(): os.system(input())
+            def b(): os.system(sys.argv[1])
+            def c(): os.system(os.environ["CMD"])
+            def d(): os.system(os.getenv("CMD"))
+        '''
+        self.assertEqual({line for _, line in _sinks(source)}, {3, 4, 5, 6})
+
+    def test_self_and_cls_are_not_sources(self):
+        source = '''
+            import os
+            class A:
+                def run(self):
+                    os.system(self.cmd)
+                @classmethod
+                def go(cls):
+                    os.system(cls.cmd)
+        '''
+        self.assertEqual(_sinks(source), set())
+
+    def test_every_sink_family(self):
+        source = '''
+            def s1(cur, q): cur.execute(q)
+            def s2(x): eval(x)
+            def s3(p): open(p)
+            def s4(p): p.read_text()
+            def s5(b): HttpResponse(b)
+            def s6(b): HttpResponse(content=b)
+            def s7(c): os.popen(c)
+            def s8(u): redirect(u)
+            def s9(u): requests.post(u)
+            def s10(u): urllib.request.urlopen(u)
+            def s11(u): httpx.get(u)
+        '''
+        self.assertEqual(
+            _sinks(source),
+            {('IV-01', 2), ('IV-02', 3), ('IV-03', 4), ('IV-03', 5), ('IV-04', 6), ('IV-04', 7),
+             ('IV-05', 8), ('IV-07', 9), ('IV-12', 10), ('IV-12', 11), ('IV-12', 12)},
+        )
+
+
+class CustomTaintSanitizerTests(SimpleTestCase):
+    """sanitizer·검사 가드 — safe.py의 매개변수 검증 8케이스와 같은 형태들."""
+
+    def test_value_sanitizers(self):
+        source = '''
+            import os, shlex
+            def a(h): os.system("ping " + shlex.quote(h))
+            def b(p): os.system(f"nc {int(p)}")
+            def c(n): open(os.path.join("/u", os.path.basename(n)))
+            def d(n): open(Path(n).name)
+            def e(x): HttpResponse("<b>" + escape(x) + "</b>")
+            def f(h): os.system(validate_host(h))
+            def g(h): os.system(self.sanitize_cmd(h))
+        '''
+        self.assertEqual(_sinks(source), set())
+
+    def test_guards_clean_after_check(self):
+        source = '''
+            import os, re
+            def a(host):
+                if not re.fullmatch(r"[a-z]+", host):
+                    raise ValueError
+                os.system("ping " + host)
+            def b(table, conn):
+                if table not in ALLOWED:
+                    raise ValueError
+                conn.cursor().execute("SELECT * FROM " + table)
+            def c(name):
+                target = (ROOT / name).resolve()
+                if not target.is_relative_to(ROOT):
+                    raise ValueError
+                return target.read_text()
+            def d(url):
+                if url_has_allowed_host_and_scheme(url, allowed_hosts=None):
+                    return redirect(url)
+            def e(x):
+                if re.match(PAT, x) is None:
+                    return
+                eval(x)
+            def f(x):
+                pattern = re.compile("a")
+                if not pattern.fullmatch(x):
+                    return
+                eval(x)
+        '''
+        self.assertEqual(_sinks(source), set())
+
+    def test_guard_only_cleans_the_checked_variable(self):
+        source = '''
+            import os
+            def a(host, other):
+                if host in ALLOWED:
+                    os.system("ping " + other)
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 5)})
+
+    def test_unknown_escape_function_propagates(self):
+        # 본문을 보지 않는 한계(1단계) — Semgrep과 같다. 2단계에서 같은 파일 함수는 요약으로 판단한다.
+        source = '''
+            import os
+            def a(h): os.system(my_escape(h))
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 3)})
+
+
+class CustomTaintControlFlowTests(SimpleTestCase):
+    """경로 비민감 합집합·루프 상한(LOOP_PASSES)."""
+
+    def test_taint_in_one_branch_is_kept(self):
+        source = '''
+            import os
+            def a(flag, h):
+                cmd = "ls"
+                if flag:
+                    cmd = "ping " + h
+                os.system(cmd)
+            def b(flag, h):
+                cmd = h
+                if flag:
+                    cmd = "ls"
+                os.system(cmd)
+        '''
+        self.assertEqual({line for _, line in _sinks(source)}, {7, 12})
+
+    def test_try_with_and_for_target(self):
+        source = '''
+            import os
+            def a(h):
+                try:
+                    cmd = "ping " + h
+                except Exception:
+                    cmd = "ls"
+                os.system(cmd)
+            def b(h):
+                with make(h) as ctx:
+                    os.system(ctx)
+            def c(hosts):
+                for h in hosts:
+                    os.system(h)
+        '''
+        self.assertEqual({line for _, line in _sinks(source)}, {8, 11, 14})
+
+    def test_loop_carried_chain_within_pass_limit(self):
+        # 역방향 체인 a = b; b = 입력: 첫 바퀴에 b, 둘째 바퀴에 a — 상한 2로 잡힌다.
+        source = '''
+            import os
+            def a(h):
+                a = ""
+                b = ""
+                for _ in range(3):
+                    a = b
+                    b = h
+                os.system(a)
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 9)})
+
+    def test_loop_carried_chain_at_pass_limit_is_caught(self):
+        # 3단계 역방향 체인(a = b; b = c; c = 입력)은 바퀴마다 한 단계씩 전파된다 — LOOP_PASSES=3이 잡는다.
+        source = '''
+            import os
+            def a(h):
+                a = b = c = ""
+                for _ in range(3):
+                    a = b
+                    b = c
+                    c = h
+                os.system(a)
+        '''
+        self.assertEqual(LOOP_PASSES, 3)
+        self.assertEqual(_sinks(source), {('IV-05', 9)})
+
+    def test_loop_carried_chain_beyond_pass_limit_is_documented(self):
+        # 4단계 체인은 상한 3에서 못 잡는다 — 알려진 한계(decisions.md). "여기서부터 못 잡는다"를 고정한다:
+        # 상한을 바꾸거나 고정점으로 가면 이 시험이 알려준다.
+        source = '''
+            import os
+            def a(h):
+                a = b = c = d = ""
+                for _ in range(4):
+                    a = b
+                    b = c
+                    c = d
+                    d = h
+                os.system(a)
+                os.system(b)
+        '''
+        found = {line for _, line in _sinks(source)}
+        self.assertIn(11, found)       # b: 세 단계 — 잡힘
+        self.assertNotIn(10, found)    # a: 네 단계 — 상한 3에서는 못 잡음
+
+    def test_call_that_is_the_whole_header_expression_is_a_sink(self):
+        # `with open(p) as f:`·`if eval(x):`·`for h in os.popen(c):` — 헤더 식 자체가 호출인 경우.
+        # 자식 호출만 보던 첫 판이 자체 저장소의 `with open(path)` 6건을 통째로 놓쳤다.
+        source = '''
+            import os
+            def a(p):
+                with open(p, encoding="utf-8") as handle:
+                    return handle.read()
+            def b(x):
+                if eval(x):
+                    return 1
+            def c(cmd):
+                for line in os.popen(cmd):
+                    pass
+        '''
+        self.assertEqual(_sinks(source), {('IV-03', 4), ('IV-02', 7), ('IV-05', 10)})
+
+    def test_nested_function_is_analyzed_separately(self):
+        source = '''
+            import os
+            def outer(h):
+                def inner(x):
+                    os.system(x)
+                inner(h)
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 5)})
+
+
+class CustomTaintEngineTests(SimpleTestCase):
+    """디렉토리 진입점 — best-effort·예산·크기·제외·결과 모양."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='custom-taint-'))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def _write(self, rel, text):
+        target = self.root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(textwrap.dedent(text), encoding='utf-8')
+
+    def test_items_look_like_semgrep_results_with_trace(self):
+        self._write('pkg/app.py', '''
+            import os
+            def f(host):
+                cmd = "ping " + host
+                os.system(cmd)
+        ''')
+        result = analyze_directory(self.root)
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(result['stats']['analyzed'], 1)
+        item = result['results'][0]
+        self.assertEqual(item['check_id'], 'custom-taint-kisa-iv-05')
+        self.assertEqual(Path(item['path']), self.root / 'pkg' / 'app.py')
+        self.assertEqual(item['start']['line'], 5)
+        self.assertEqual(item['extra']['metadata'], {'kisa_code': 'KISA-IV-05', 'cwe': 'CWE-78', 'engine': 'custom-taint'})
+        self.assertEqual(item['extra']['taint_trace'], {
+            'source': {'path': 'pkg/app.py', 'line': 3, 'code': 'def f(host):'},
+            'steps': [{'path': 'pkg/app.py', 'line': 4, 'code': 'cmd = "ping " + host'}],
+            'sink': {'path': 'pkg/app.py', 'line': 5, 'code': 'os.system(cmd)'},
+        })
+
+    def test_syntax_error_and_non_python_do_not_stop_the_run(self):
+        self._write('bad.py', 'def (:\n')
+        self._write('ok.py', 'import os\ndef f(h): os.system(h)\n')
+        self._write('note.txt', 'os.system(x)')
+        result = analyze_directory(self.root)
+        self.assertEqual(result['stats']['files'], 2)
+        self.assertEqual(result['stats']['parse_errors'], 1)
+        self.assertEqual(len(result['results']), 1)
+        self.assertTrue(result['errors'][0].startswith('bad.py: 문법 오류'))
+
+    def test_budget_and_size_limits_skip_files(self):
+        self._write('a.py', 'import os\ndef f(h): os.system(h)\n')
+        self._write('b.py', 'import os\ndef f(h): os.system(h)\n')
+        result = analyze_directory(self.root, time_budget=0)
+        self.assertEqual(result['stats']['skipped_budget'], 2)
+        self.assertEqual(result['results'], [])
+        self.assertIn('시간 예산', result['errors'][0])
+        result = analyze_directory(self.root, max_file_bytes=5)
+        self.assertEqual(result['stats']['skipped_size'], 2)
+
+    def test_exclusion_callback(self):
+        self._write('vendor/x.py', 'import os\ndef f(h): os.system(h)\n')
+        self._write('app.py', 'import os\ndef f(h): os.system(h)\n')
+        result = analyze_directory(self.root, is_excluded=lambda parts: parts[0] == 'vendor')
+        self.assertEqual(result['stats']['skipped_excluded'], 1)
+        self.assertEqual([Path(i['path']).name for i in result['results']], ['app.py'])
+
+
+class ExecuteAnalysisTests(AnalysisTestCase):
+    """Semgrep → 자체 taint → 시그널 순서, best-effort, 설정 스위치."""
+
+    def _run(self, entries):
+        self.login(self.admin)
+        response = self.client.post(
+            list_url(self.project_a.pk), {'file': upload_file(entries=entries)}, format='multipart',
+        )
+        run = AnalysisRun.objects.get(pk=response.data['id'])
+        self.assertTrue(mark_queued(run))
+        self.assertTrue(start_run(run))
+        return run
+
+    @patch('analysis.services.subprocess.run')
+    def test_custom_result_is_saved_after_semgrep(self, mock_run):
+        run = self._run({'app.py': 'import os\ndef f(h):\n    c = h\n    os.system(c)\n'})
+        _succeeding_semgrep(mock_run)
+        execute_analysis(run)
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED)
+        self.assertEqual(run.custom_result['stats']['analyzed'], 1)
+        self.assertEqual(run.custom_result['results'][0]['start']['line'], 4)
+        self.assertEqual(run.custom_result['errors'], [])
+
+    @patch('analysis.services.subprocess.run')
+    def test_semgrep_failure_skips_custom_engine(self, mock_run):
+        run = self._run({'app.py': 'x = 1\n'})
+        mock_run.return_value.returncode = 2
+        mock_run.return_value.stdout = ''
+        mock_run.return_value.stderr = 'boom'
+        execute_analysis(run)
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.FAILED)
+        self.assertIsNone(run.custom_result)
+
+    @patch('analysis.services.subprocess.run')
+    def test_engine_crash_is_recorded_not_raised(self, mock_run):
+        run = self._run({'app.py': 'x = 1\n'})
+        _succeeding_semgrep(mock_run)
+        with patch('analysis.services.analyze_directory', side_effect=RuntimeError('boom')):
+            with self.assertLogs('analysis.services', level='ERROR'):
+                execute_analysis(run)
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisStatus.SUCCEEDED)
+        self.assertEqual(run.custom_result['results'], [])
+        self.assertIn('RuntimeError', run.custom_result['errors'][0])
+
+    @override_settings(ANALYSIS_CUSTOM_TAINT_ENABLED=False)
+    @patch('analysis.services.subprocess.run')
+    def test_disabled_engine_stores_none(self, mock_run):
+        run = self._run({'app.py': 'import os\ndef f(h): os.system(h)\n'})
+        _succeeding_semgrep(mock_run)
+        execute_analysis(run)
+        run.refresh_from_db()
+        self.assertIsNone(run.custom_result)
+
+    @patch('analysis.services.subprocess.run')
+    def test_project_exclude_paths_apply_to_custom_engine(self, mock_run):
+        self.project_a.exclude_paths = ['vendor']
+        self.project_a.save()
+        run = self._run({
+            'app.py': 'import os\ndef f(h): os.system(h)\n',
+            'vendor/lib.py': 'import os\ndef f(h): os.system(h)\n',
+        })
+        _succeeding_semgrep(mock_run)
+        execute_analysis(run)
+        run.refresh_from_db()
+        self.assertEqual(run.custom_result['stats']['skipped_excluded'], 1)
+        self.assertEqual(len(run.custom_result['results']), 1)
+
+    @patch('analysis.services.subprocess.run')
+    def test_run_detail_exposes_custom_taint_stats(self, mock_run):
+        run = self._run({'app.py': 'import os\ndef f(h): os.system(h)\n'})
+        _succeeding_semgrep(mock_run)
+        execute_analysis(run)
+        response = self.client.get(detail_url(run.pk))
+        stats = response.data['custom_taint_stats']
+        self.assertEqual(stats['analyzed'], 1)
+        self.assertIn('semgrep_only', stats)  # 표준화가 병합 통계를 덧붙인다

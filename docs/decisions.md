@@ -1215,3 +1215,80 @@ Semgrep 문서만 읽어서는 예측할 수 없고, 실제로 돌려 JSON을 �
   같은 zip으로 패턴 룰 실행(run 53)과 taint 룰 실행(run 57)을 비교하니 new 0 / resolved 0 / persisted 14 —
   IV-01·02·05·07 결과가 전부 '유지'로 짝지어졌다(핑거프린트가 KISA 코드 기준이라는 판단 2의 실증) |
   SFR-009, TST-005
+
+## 2026-09-06 (자체 taint 분석 1단계 — 함수 내, Semgrep과의 병합)
+
+- **목표와 범위** | Semgrep OSS taint의 한계 표(위 9/6 taint) 중 (1) 같은 파일 안 함수 간 추적, (2) 클래스
+  필드 경유를 우리가 한다. 파일 간(import 해석)은 처음부터 범위 밖. 세 단계(함수 내 → 함수 간 → 클래스
+  필드)로 나누고 이 항목은 1단계다. 설계 판단은 프로토타입(약 250줄, `ast`만)으로 먼저 확인했다 —
+  `vulnerable.py`에서 Semgrep taint의 싱크 줄 15개와 같은 집합, `safe.py` 0건, 그리고 Semgrep이 못 잡던
+  호출자→헬퍼·요청값만 소스인 헬퍼·클래스 필드 케이스를 잡았다 | SFR-009
+- **구조: `analysis/taint/` 패키지, Django 비의존, 워커의 같은 작업에서 Semgrep 다음에** | Semgrep 실행이
+  analysis 앱의 책임이듯 자체 엔진 실행도 analysis다. 패키지 안은 표준 라이브러리 `ast`만 쓴다 —
+  `catalog/snippet.py`·`taint_trace.py`와 같은 원칙으로, 나중에 CI 게이트(Django 없는 러너)가 같은 엔진을
+  부를 수 있게. KISA 코드는 Semgrep 룰 metadata처럼 문자열로만 다뤄 analysis→catalog 의존을 만들지 않는다
+  (QLT-001). 실행은 새 오케스트레이터 `execute_analysis(run)` = `run_semgrep` → `run_custom_taint` → 표준화
+  시그널. `run_semgrep`은 이제 시그널을 보내지 않는다(직접 부르던 시험 5개는 `execute_analysis`로). 자체
+  엔진은 best-effort — 파일 단위 실패(문법 오류·읽기 실패)는 `errors`에 한 줄, 엔진 자체가 죽어도 run은
+  SUCCEEDED로 남고 `errors`에 기록. 시간 예산 `ANALYSIS_CUSTOM_TAINT_TIMEOUT`(120초), 파일 1MB 상한, 스위치
+  `ANALYSIS_CUSTOM_TAINT_ENABLED`. 결과는 `AnalysisRun.custom_result`(0004)에 — `raw_result`는 "Semgrep 원본
+  그대로"라 섞지 않는다 | SFR-009, QLT-001
+- **정의는 자체 스펙(`analysis/taint/spec.py`) — YAML을 재사용하지 않고, 정합성 시험으로 두 곳을 묶는다** |
+  `taint_python.yaml`은 Semgrep 패턴 언어(메타변수·`...`·focus·by-side-effect·metavariable-regex)라 재사용하려면
+  그 언어의 해석기가 필요하고, 그것이 분석기 본체보다 크며 어차피 근사다. 스펙은 선언적 데이터클래스
+  (`Sink('KISA-IV-05', 'subprocess.*', 0, requires_kw=('shell', True))`, `Sanitizer('*.name', 'KISA-IV-03',
+  attribute=True)`, 검사 가드 상수)로 분석기가 바로 쓴다. 두 곳이 어긋나는 위험은 `catalog/tests.py`의
+  정합성 시험이 막는다 — YAML 패턴에서 호출 이름을 뽑아(`$C.execute` → `*.execute`, `subprocess.$FUNC` →
+  `subprocess.*`) KISA 코드별로 스펙과 대조하고, 소스·이름 규약·가드 이름의 존재도 본다. **한쪽을 고치면
+  다른 쪽도 고친다** | SFR-009, QLT-002
+- **오염 상태: 접근 경로 → Taint(경로 노드 포함) 사전, 표현식은 즉석 평가** | 상태 단위는 `('host',)`,
+  `('self', 'q')`, `('d', "['k']")` 같은 접근 경로 튜플이고, 읽을 때는 정확한 경로 → 접두사 순으로 찾는다
+  (d가 오염이면 d['k']도). Taint 값은 소스 노드와 경유 노드를 들고 다녀 보고 시점에 ⑦의 taint_trace 형식이
+  그대로 나온다. 종류는 input(요청·표준입력 등 실제 입력)·param(매개변수), 같은 싱크에 둘 다 닿으면 input
+  우선. 함수 간은 `Summary(param_to_return, param_to_sinks)`, 클래스 필드는 클래스 단위 필드 환경 — 둘 다
+  같은 Taint를 값으로 쓰는 확장 지점(2·3단계) | SFR-009
+- **순회: `ast` + 환경을 넘기는 자체 순회, 경로 비민감 합집합** | NodeVisitor는 visit가 환경을 돌려주지
+  않아 분기 병합을 표현할 수 없다. if는 두 갈래를 같은 환경 사본에서 분석해 합치고(한쪽만 오염이어도 오염),
+  검사 가드(`if x in ALLOWED:`, `if not re.fullmatch(p, x): raise`, `if not p.is_relative_to(ROOT): raise`,
+  `url_has_allowed_host_and_scheme`)는 그 뒤의 변수를 깨끗하게(Semgrep by-side-effect와 같은 근사), 루프는
+  본문을 `LOOP_PASSES`(2)번 돌려 루프 전달 오염을 근사, try는 본문·핸들러·else·finally 합집합. 포기한 것:
+  경로 민감도, 전역·클로저 변수, *args/**kwargs, 데코레이터 의미. 중첩 함수·메서드는 각자 독립 분석 |
+  SFR-009
+- **루프 상한 `LOOP_PASSES` — 2에서 3으로 올렸다. 4단계 이상 체인은 여전히 놓치고, 고정점까지는 가지 않는다** |
+  루프 전달 오염은 바퀴마다 한 단계씩 번진다: `for …: a = b; b = c; c = 입력`은 상한 2에서 b까지만 오염이고
+  a의 싱크를 놓쳤다(구현 중 시험으로 확인). (1) 3으로 올린 이유 — 비용이 사실상 0이다(엔진 전체가 자체 저장소
+  81파일 0.8초, 도그푸딩 zip 59파일 0.09초; 루프 본문을 한 번 더 도는 비용은 그 안에 묻힌다). 미탐은 오탐과
+  달리 아무도 모르는 채 지나가므로 값이 싸면 줄이는 게 맞다. "실코드에서 이 형태의 빈도 근거가 없다"는
+  없다는 근거가 아니다 — 헤더 식 호출(`with open(p)`)도 샘플엔 없었지만 실코드엔 흔했다(아래). (2) 남는 한계 —
+  4단계 체인(`a = b; b = c; c = d; d = 입력`)은 상한 3에서 못 잡고, 상한이 어디든 그보다 한 단계 긴 체인은
+  놓친다. 시험 두 개가 경계를 고정한다: 3단계는 잡힘, 4단계는 못 잡음 — 상한을 바꾸거나 고정점으로 가면
+  시험이 알려준다. (3) 고정점(fixpoint)까지 가지 않은 이유 — 환경이 유한하고 합집합만 하므로 이론상 종료
+  하지만, 오염 값이 경유 노드를 들고 다니는 지금 표현에서는 "같은 변수가 다른 경로로 오염"이 매 바퀴 새 값으로
+  보여 안정 판정이 복잡해진다(노드를 뺀 별도 비교나 경로 없는 요약이 필요). 실익은 "3단계보다 긴 루프 전달
+  체인"뿐이라 그 복잡도를 지금 사지 않는다. 필요해지면 상한을 올리는 쪽이 먼저다(상수 한 줄) | SFR-009
+- **결과 형식: Semgrep JSON 모양으로 만들어 기존 표준화에 태운다** | item은 `check_id='custom-taint-kisa-iv-05'`,
+  절대경로 `path`, `start/end`, `extra.metadata{kisa_code, cwe, engine: custom-taint}`, `extra.taint_trace`(⑦ 형식,
+  노드마다 path·line·code). `ingest_findings`가 `raw_result.results` + `custom_result.results`를 같은 코드로
+  Finding으로 만들고, taint_trace가 item에 있으면 그대로(자체 엔진), 없으면 텍스트 어댑터(Semgrep)에서 찾는다.
+  핑거프린트·판정 승계·diff는 그대로 | SFR-014, DAR-009
+- **Semgrep taint와의 중복: (KISA 코드, 파일, 싱크 줄)로 병합, 겹치면 우리 것을 남기고 양쪽 엔진을 기록** |
+  같은 줄을 둘 다 잡으면 핑거프린트가 같아 `:1/:2` 두 건이 되므로 병합한다. 겹치면 custom-taint 항목을 남긴다
+  — 경로가 더 구체적이다(헬퍼 싱크에서 Semgrep은 '매개변수', 우리는 호출자의 입력까지). 남긴 finding의
+  `extra['engines'] = ['custom-taint', 'semgrep-taint']`. Semgrep끼리의 중복(다른 룰이 같은 줄)은 기존 동작 그대로.
+  Semgrep taint 룰은 유지한다 — 함수 내 동등성이 두 릴리스 이상 유지되면 교체를 다시 판단. CI 게이트는 자체
+  엔진을 돌리지 않으므로 무영향 | SFR-014
+- **"Semgrep만 잡은 것"을 눈에 보이게 — `custom_result.stats.semgrep_only` + 경고 로그 + API 노출 (사용자
+  요청)** | 병합 통계 semgrep_only(Semgrep taint만)·custom_only(자체 엔진만)·both를 표준화가 `custom_result.stats`에
+  덧붙이고, semgrep_only > 0이면 `catalog.services` 경고 로그(run id·건수·처음 5건 파일:줄)를 남긴다. 실행 상세
+  API의 `custom_taint_stats`로 화면 없이 확인한다. 1단계 종료 기준 (a)는 이 값으로 단언한다 —
+  `CustomTaintParityTests`: `vulnerable.py`에서 semgrep_only 0·custom_only 0·both 15, `safe.py` 0건. 동등성 뒤로는
+  "semgrep_only가 0 유지"가 회귀 감지 장치 | SFR-014, TST-005
+- **자체 저장소로 확인한 동등성 — 구현 중 잡은 결함 하나** | 첫 판은 자체 저장소에서 Semgrep taint의 6건 중
+  1건만 잡았다. 원인: 호출 순회가 자식 호출만 보고 **식 자체가 호출인 경우**(`with open(path) as f:`, `if eval(x):`,
+  `for h in os.popen(c):`)를 빠뜨렸다 — 샘플에는 없고 실제 코드에 흔한 형태라 도그푸딩이 잡았다. 고친 뒤 6건
+  일치(services.py `open(fs_path(target))`, sast_gate.py 4, test_sast_gate.py 1). 시험으로 고정 | TST-005
+- **성능** | 순수 Python·파일당 ms 단위: 자체 저장소 81파일 0.8초, 도그푸딩 zip 59파일 0.09초, 샘플 파일 5개
+  0.02초. Semgrep 기동(약 10초)에 비하면 무시할 수준이라 같은 워커 작업 안에서 동기로 돈다 | SEC-009
+- **다음 단계** | 2단계(같은 파일 함수 간): 함수 요약(param→return, param→sink), 요약이 있는 함수는 요약대로만
+  판단(`def clean(x): return int(x)`를 본문으로 — 이름 규약보다 정확), 새 샘플 `taint_inter_*.py`와 "Semgrep은
+  여기서 N건을 못 잡는다"를 명시하는 기대표. 3단계(클래스 필드): 클래스 단위 필드 환경(흐름 비민감) | SFR-009
