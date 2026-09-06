@@ -17,6 +17,10 @@
   흘러가는가"를 봅니다. 상수만 흐르면 잡지 않고, 검증(정규식·allowlist·타입 변환·이스케이프)을
   거친 값은 깨끗한 것으로 봅니다. 결과에는 엔진(`taint` 태그)과 소스→경유→싱크 오염 경로가
   붙습니다. Semgrep 무료 엔진은 함수·파일 간 추적을 하지 않습니다(`docs/decisions.md` 9/6 taint)
+- 자체 taint 엔진(`analysis/taint`, Python): Semgrep 다음에 같은 워커 작업에서 돌며 같은 항목을 `ast`
+  기반으로 추적합니다. 결과는 Semgrep과 (항목·파일·싱크 줄)로 병합되고, 실행 상세의 `custom_taint_stats`에서
+  "Semgrep만 잡은 건수(semgrep_only)"가 0인지로 두 엔진의 동등성을 확인할 수 있습니다. 1단계(함수 내)까지
+  구현, 같은 파일 함수 간·클래스 필드 추적은 다음 단계입니다. `.env`의 `ANALYSIS_CUSTOM_TAINT_ENABLED`로 끕니다
 
 ## 실행 방법 (Getting Started)
 

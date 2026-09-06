@@ -21,6 +21,9 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
     # 브레드크럼이 "#22" 같은 id 대신 이름을 보여주기 위한 표시용 필드 —
     # 실행을 보는 사용자는 프로젝트 조회 스코프도 통과하므로 노출 문제가 없다.
     project_name = serializers.CharField(source='project.name', read_only=True)
+    # 자체 taint 엔진 통계(파일 수·건수·예산·Semgrep과의 병합 결과). 결과 본문은 Finding으로 가므로 내려보내지
+    # 않고, "Semgrep만 잡은 건수(semgrep_only)가 0인가"를 화면 없이 확인할 수 있게 통계만 노출한다.
+    custom_taint_stats = serializers.SerializerMethodField()
 
     class Meta:
         model = AnalysisRun
@@ -35,6 +38,7 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
             'raw_result',
             'error_message',
             'severity_counts',
+            'custom_taint_stats',
             'created_at',
             'queued_at',
             'started_at',
@@ -56,6 +60,13 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
             'medium': counts.get('MEDIUM', 0),
             'low': counts.get('LOW', 0),
         }
+
+    def get_custom_taint_stats(self, run):
+        result = run.custom_result or {}
+        stats = dict(result.get('stats') or {})
+        if result.get('errors'):
+            stats['errors'] = len(result['errors'])
+        return stats or None
 
     def get_sequence(self, run):
         """프로젝트 내 회차 — 화면 표시용 ("N번째 분석"), 식별자는 여전히 id.

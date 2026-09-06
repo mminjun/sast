@@ -5,6 +5,7 @@
 """
 
 import json
+import logging
 import os
 import shutil
 import stat
@@ -21,6 +22,9 @@ from projects.exclude_paths import is_excluded, validate_exclude_paths
 
 from .models import AnalysisRun, AnalysisStatus
 from .signals import run_succeeded
+from .taint import analyze_directory
+
+logger = logging.getLogger(__name__)
 
 
 def run_sequence(run):
@@ -449,6 +453,43 @@ def run_semgrep(run):
     run.finished_at = timezone.now()
     run.save(update_fields=['raw_result', 'status', 'finished_at'])
 
-    # 결과가 저장된 뒤에 알린다 — 수신자(catalog)가 raw_result를 읽어 표준화한다.
-    # 이 앱은 듣는 쪽이 누구인지 모른다 (analysis/signals.py 참고, QLT-001).
+
+def run_custom_taint(run):
+    """자체 taint 엔진(analysis/taint)을 격리된 소스에 돌려 custom_result에 저장한다.
+
+    best-effort — 어떤 실패도 run을 FAILED로 만들지 않는다. 엔진 안의 파일 단위 실패는 엔진이 errors에 적고,
+    엔진 자체가 죽으면 여기서 한 줄로 남긴다. 표준화가 Semgrep 결과와 합친다 (catalog/services.py).
+    설정으로 껐으면 None을 저장한다.
+    """
+    if not settings.ANALYSIS_CUSTOM_TAINT_ENABLED:
+        run.custom_result = None
+        run.save(update_fields=['custom_result'])
+        return
+    try:
+        exclude_paths = validate_exclude_paths(run.project.exclude_paths)
+        result = analyze_directory(
+            source_dir(run),
+            time_budget=settings.ANALYSIS_CUSTOM_TAINT_TIMEOUT,
+            is_excluded=(lambda parts: is_excluded(parts, exclude_paths)) if exclude_paths else None,
+        )
+        run.custom_result = strip_nul(result)
+    except Exception as exc:  # noqa: BLE001 — 부가 엔진의 실패가 분석 실행을 막지 않는다
+        logger.exception('자체 taint 엔진 실패 (run=%s)', run.pk)
+        run.custom_result = {
+            'results': [], 'errors': [f'엔진 실패: {type(exc).__name__}: {exc}'[:500]], 'stats': {},
+        }
+    run.save(update_fields=['custom_result'])
+
+
+def execute_analysis(run):
+    """분석 파이프라인 — Semgrep → 자체 taint → 표준화 알림 (SFR-008~009).
+
+    run_semgrep이 실패로 끝나면 나머지는 하지 않는다. 자체 엔진은 Semgrep이 성공한 격리 소스에 대해 같은
+    작업 안에서 돌고, 결과가 모두 저장된 뒤에 시그널을 보낸다 — 수신자(catalog)가 raw_result·custom_result를
+    읽어 표준화한다. 이 앱은 듣는 쪽이 누구인지 모른다 (analysis/signals.py 참고, QLT-001).
+    """
+    run_semgrep(run)
+    if run.status != AnalysisStatus.SUCCEEDED:
+        return
+    run_custom_taint(run)
     run_succeeded.send(sender=AnalysisRun, run=run)

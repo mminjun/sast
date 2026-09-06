@@ -56,6 +56,8 @@ KISA 개발보안 가이드 기반 SAST(정적 애플리케이션 보안 테스�
 - 인젝션 계열 Python 룰은 `catalog/rules/taint_python.yaml`(mode: taint)에 있다. 같은 항목의 패턴
   룰을 병행하지 않는다 — 핑거프린트는 KISA 코드 기준이라 같은 줄이 두 번 집계된다.
 - 샘플(`catalog/samples`)·기대 건수(`catalog/tests.py EXPECTED_*`)·`seed_catalog`를 함께 갱신한다.
+- 자체 taint 엔진(`analysis/taint`)은 Django를 import하지 않는다. 소스·싱크·sanitizer는 `spec.py`에 있고
+  `taint_python.yaml`과 정합성 시험으로 묶여 있다 — 한쪽을 고치면 다른 쪽도 고친다.
 
 ## 테스트 실행
 

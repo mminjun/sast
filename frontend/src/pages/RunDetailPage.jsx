@@ -344,7 +344,9 @@ export default function RunDetailPage() {
                   )}
                   {/* 어느 엔진이 잡았나 — taint(흐름 추적) 결과만 표시한다. 패턴은 기본값이라 생략. */}
                   {f.extra?.engine && f.extra.engine !== 'semgrep-pattern' && (
-                    <span className="badge badge-engine" title={f.extra.engine}>taint</span>
+                    <span className="badge badge-engine" title={(f.extra.engines || [f.extra.engine]).join(' + ')}>
+                      taint
+                    </span>
                   )}
                   <div className="muted small">{f.rule_name}</div>
                 </td>

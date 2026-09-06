@@ -234,8 +234,10 @@ def _build_finding(item, run, rules_by_code, source_root, snippet_cache, traces)
         'engine': engine,
     }
     # 오염 경로는 taint 엔진 결과에만, 그리고 찾았을 때만 붙인다 — 키가 없으면 "경로 없음".
+    # 자체 엔진(custom-taint)은 item에 경로를 직접 싣고(analysis/taint/report.py), Semgrep taint는 텍스트
+    # 출력에서 찾는다.
     if engine != ENGINE_PATTERN:
-        trace = _taint_trace_for(traces, relative_path, check_id, start_line)
+        trace = extra.get('taint_trace') or _taint_trace_for(traces, relative_path, check_id, start_line)
         if trace is not None:
             finding_extra['taint_trace'] = trace
 
@@ -255,6 +257,48 @@ def _build_finding(item, run, rules_by_code, source_root, snippet_cache, traces)
         code_snippet=snippet,
         extra=finding_extra,
     )
+
+
+def _merge_key(finding):
+    return (finding.rule_code or finding.semgrep_check_id, finding.file_path, finding.start_line)
+
+
+def _merge_engines(semgrep_findings, custom_findings):
+    """Semgrep 결과와 자체 taint 결과를 (KISA 코드, 파일, 싱크 줄)로 병합한다 (docs/decisions.md custom-taint 판단 6).
+
+    같은 줄을 둘 다 잡으면 핑거프린트가 같아 `:1/:2` 두 건이 되므로 하나만 남긴다 — **자체 엔진 것을** 남긴다
+    (경로가 더 구체적: 헬퍼 싱크에서 Semgrep은 '매개변수', 우리는 호출자의 입력까지). 남긴 finding의
+    extra['engines']에 양쪽 엔진을 적는다. Semgrep끼리의 중복(다른 룰이 같은 줄)은 건드리지 않는다 — 기존 동작.
+
+    통계: semgrep_only(Semgrep taint만), custom_only(자체 엔진만), both. 함수 내 동등성이 확인된 뒤로는
+    semgrep_only가 0으로 유지되는지가 회귀 감지 장치다(1단계 종료 기준).
+    """
+    custom_by_key = {}
+    for finding in custom_findings:
+        custom_by_key.setdefault(_merge_key(finding), finding)
+
+    kept = []
+    both_keys = set()
+    semgrep_taint_only = []
+    for finding in semgrep_findings:
+        key = _merge_key(finding)
+        custom = custom_by_key.get(key)
+        if custom is None:
+            if finding.extra.get('engine') == ENGINE_SEMGREP_TAINT:
+                semgrep_taint_only.append(finding)
+            kept.append(finding)
+            continue
+        both_keys.add(key)
+        custom.extra['engines'] = sorted({custom.extra['engine'], finding.extra['engine']})
+    kept.extend(custom_by_key.values())
+
+    stats = {
+        'semgrep_only': len(semgrep_taint_only),
+        'semgrep_only_samples': [f'{f.file_path}:{f.start_line}' for f in semgrep_taint_only[:5]],
+        'custom_only': len([k for k in custom_by_key if k not in both_keys]),
+        'both': len(both_keys),
+    }
+    return kept, stats
 
 
 def previous_succeeded_run(run):
@@ -335,10 +379,12 @@ def ingest_findings(run):
     보이는 상태를 만들지 않는다).
     """
     results = (run.raw_result or {}).get('results') or []
+    custom_results = (run.custom_result or {}).get('results') or []
     source_root = source_dir(run).resolve()
     rules_by_code = {rule.code: rule for rule in DiagnosticRule.objects.all()}
 
     findings = []
+    custom_findings = []
     skipped = 0
     # 수집 1회 동안만 유지되는 조각 캐시 — 같은 줄에 여러 룰이 걸린 경우 파일을
     # 반복해서 열지 않는다.
@@ -350,6 +396,24 @@ def ingest_findings(run):
             skipped += 1
             continue
         findings.append(finding)
+    for item in custom_results:
+        finding = _build_finding(item, run, rules_by_code, source_root, snippet_cache, traces)
+        if finding is None:
+            skipped += 1
+            continue
+        custom_findings.append(finding)
+    findings, merge_stats = _merge_engines(findings, custom_findings)
+    if run.custom_result is not None:
+        # 병합 통계는 표준화에서만 알 수 있으므로 여기서 custom_result.stats에 덧붙인다. semgrep_only는
+        # "Semgrep taint는 잡았는데 자체 엔진은 못 잡은" 건수 — 함수 내 동등성이 깨졌다는 회귀 신호.
+        run.custom_result = {**run.custom_result, 'stats': {**(run.custom_result.get('stats') or {}), **merge_stats}}
+        run.save(update_fields=['custom_result'])
+        if merge_stats['semgrep_only']:
+            logger.warning(
+                '자체 taint 엔진이 놓친 Semgrep taint 결과 %d건 (run=%s): %s — 함수 내 동등성이 깨졌는지 '
+                '(analysis/taint) 확인하세요.',
+                merge_stats['semgrep_only'], run.pk, ', '.join(merge_stats['semgrep_only_samples']),
+            )
 
     # 오염 경로는 부가정보라 없어도 저장은 계속되지만, "taint 결과는 있는데 경로가 하나도 안
     # 붙음"은 텍스트 형식이 바뀌었거나(Semgrep 버전) 실행이 텍스트를 안 남긴 것이라 조용히
