@@ -452,3 +452,32 @@
   313개가 405초라 실측: bcrypt 0.31초/해시 × 시험당 사용자 2~3명 = 대부분. 테스트 실행 중에만
   MD5 해셔(settings, `sys.argv[1:2]==['test']`), SEC-001 검증 시험 2개는 override_settings로 bcrypt
   고정. 158초 → `--parallel 4`로 56초. 전체는 577초 → 176초. CLAUDE.md에 "평소/커밋 전" 명령 기록
+- 분석 실행 백그라운드 큐(feature/async-queue): 동기 실행의 세 문제(대형 코드베이스·다중 사용자
+  대기·동시 실행 수 제한 불가)를 "요청 → 큐 등록(QUEUED, 202) → 워커 처리"로 분리. Plan Mode로
+  설계 9개 판단을 먼저 승인받음. Celery+Redis·RQ·huey·django-q2를 표로 비교해 **Django 6.1 내장
+  Tasks 프레임워크 + django-tasks-db 0.13.0**(큐=PostgreSQL 테이블, 새 인프라 0, 의존성 1개) 채택 —
+  6.1 미기재 위험은 `check`·`migrate`·enqueue·`db_worker --batch` 실증 게이트로 먼저 확인(통과).
+  상태에 QUEUED·`queued_at` 추가(0003), 조건부 UPDATE를 요청 측(`mark_queued`)·워커 측(`start_run`)
+  두 지점으로 나눠 at-least-once 재전달에도 Semgrep 1회. `analysis/tasks.py run_analysis`,
+  `analysis_worker`(db_worker 상속, 시작 시 `reap_stale_runs` 자동 — 수동만 두면 아무도 안 돌린다는
+  피드백 반영), 동기 모드는 `ANALYSIS_TASK_BACKEND=immediate` 설정으로 대체(옛 코드 경로 삭제).
+  탐색에서 "프론트가 폴링 중"이라는 전제가 틀렸음을 발견 — 두 페이지에 3초 폴링, QUEUED 배지,
+  5분 이상 대기열이면 "워커 확인" 힌트(`utils/runStatus.js`) 추가, `npm run build` 통과. 상한
+  (200/500/600, 질문의 50/100/120은 옛 값)은 유지. 테스트: 기존 단언 9줄(200→202)만 수정, 신규 13개
+  (Dummy 백엔드 등록 검증·작업 함수·고착 정리·실제 DB 워커 한 바퀴 TransactionTestCase). secure-review
+  통과. decisions에 Celery 미채택 근거 표와 Celery 확장 경로(서드파티 백엔드 2종, 바꿀 곳 3개) 기록.
+  개발 DB에서의 화면 실증(워커 없이 실행→대기열→워커 기동→완료)은 DB 쓰기라 승인 뒤 진행 예정
+- 큐 실증(개발 DB, 프로젝트 #33 "이아인", demo-app-v1/v2.zip, Chrome 확장으로 화면 확인). 커밋 97c8b15 뒤
+  진행. 워커 없이 실행 → `POST …/53/execute/` **202**, 배지 `대기열`(호박색), 실행 버튼 사라짐. 힌트는
+  5분을 기다리지 않고 `QUEUED_STALE_MS`를 20초로 잠깐 낮춰 확인(문구 표시됨, 확인 후 원복). 워커
+  (`analysis_worker`, 실증용으로 타임아웃 60초·여유 0초 env) 기동 → 3초 폴링이 `실행중`→`완료`를 잡아
+  대시보드(14건)·변화량·목록 갱신, 종료 후 폴링 중단(네트워크 요청으로 확인). v2 실행 중 워커 강제 종료
+  (taskkill) → RUNNING 고착, 고아 semgrep 프로세스 없음 → 60초 뒤 워커 재기동 → stdout "고착된 RUNNING
+  실행 1건을 FAILED로 정리했습니다" → 화면에 `실패`+사유+실행 버튼 복귀 → 재실행 → 상세 페이지 폴링
+  (3초 간격 GET 3회)으로 `완료` 12건(HIGH 7·MEDIUM 4·LOW 1) 표시.
+  **실증에서 잡은 결함**: 재실행이 완료됐는데 API 응답의 `error_message`에 이전 실패 사유("워커가
+  중단되어…")가 그대로 남았다 — 성공 저장이 raw_result·status·finished_at만 갱신하기 때문. `mark_queued`가
+  재큐잉 때 error_message·started_at·finished_at을 지우도록 고치고 테스트에 단언 추가(화면은 FAILED일
+  때만 사유를 보여 드러나지 않았지만 API·비교 화면의 근거가 거짓이 되는 문제). 알려진 동작: 다른
+  세션(API·다른 사용자)이 올린 실행은 현재 열린 목록에 폴링으로 나타나지 않는다 — 폴링은 이미 보이는
+  대기열·실행중 행이 있을 때만 돌고, 새 행은 새로고침으로 본다

@@ -1014,3 +1014,97 @@ Semgrep 문서만 읽어서는 예측할 수 없고, 실제로 돌려 JSON을 �
   실측했다. Windows(spawn)에서도 문제없이 돌았고 전체 스위트는 176초(약 3분)로 줄었다. 시험이
   서로 임시 디렉토리·테스트 DB 복제본을 쓰므로 공유 상태 없이 병렬이 안전하다. 실패 시 원인
   격리가 필요하면 `--parallel 1`로 다시 돈다 | TST-004
+
+## 2026-09-06 (분석 실행 백그라운드 큐 — SFR-008~009, SFR-015, SEC-009)
+
+- **실행을 "요청 → 큐 등록 → 워커 처리"로 분리한다 — 8/28의 "동기 실행" 결정을 뒤집는다** |
+  동기 실행은 세 문제를 동시에 갖는다: 대형 코드베이스는 HTTP 요청이 분 단위로 붙잡히고,
+  사용자가 겹치면 서로 기다리며, 동시 실행 수를 걸 자리가 없다. 8/28엔 "새 인프라 없이 일정 내
+  완주"가 우선이었고 그 판단은 맞았다 — 이제 파이프라인·룰·오탐 관리가 끝났으니 구조를 바꿀
+  차례다. 실행 뷰는 run을 QUEUED로 바꾸고 작업을 큐에 넣은 뒤 202로 즉시 응답하고, 워커
+  (`manage.py analysis_worker`)가 집어 가서 `run_semgrep`을 돌린다. `run_semgrep` 자체는 무수정 |
+  SFR-008, SFR-009
+- **Celery + Redis를 쓰지 않는다 — Django 6.1 내장 Tasks 프레임워크 + DB 백엔드(django-tasks-db).
+  "부품이 늘어나는 만큼 값어치가 있어야 한다"를 적용한 사례** | 우리 부하는 "관리자가 가끔
+  누르는 분석, 건당 수십 초~10분, 하루 수십 건"이고 필요한 것은 큐·워커·중복 방지·테스트용 동기
+  모드 넷뿐이다. 재시도·라우팅·스케줄·팬아웃은 없다.
+
+  | 후보 | 새 부품 | Windows 개발(현재 환경) | Redis 없는 테스트/CI | 판단 |
+  |---|---|---|---|---|
+  | Celery + Redis | 패키지 7~8개(celery·kombu·billiard·vine·amqp·redis…) + Redis 컨테이너 | prefork 불가 → `--pool=solo/threads`, 그 풀에선 time_limit 미동작 | `task_always_eager`로 가능하나 시그널·트랜잭션 의미가 실제와 어긋남 | 값어치 없음 — 쓰는 기능이 1/10 |
+  | RQ | rq + redis + Redis 컨테이너 | `os.fork` 기반이라 Windows 미지원(SimpleWorker 우회) | eager 모드 없음, fakeredis 필요 | 탈락 |
+  | huey | huey + redis + Redis 컨테이너 | thread 워커로 동작 | `immediate` 모드 있음 | 가능하나 Redis가 여전히 필요 — DB 백엔드가 6.1에 안 붙었을 때의 대안 |
+  | django-q2(ORM 브로커) | django-q2(+자체 테이블 3개) | multiprocessing 클러스터, Windows 지원 불확실 | `sync=True` | 부품 대비 불확실성 큼 |
+  | **Django 6.1 `django.tasks` + django-tasks-db** | **패키지 1개(+typing_extensions·django-stubs-ext 전이), 새 서비스 0개** | 워커는 단일 프로세스 루프, SIGINT/SIGTERM만 사용(소스 확인) | **`ImmediateBackend`가 Django 코어에 있음** — 설정만 바꾸면 요청 안에서 동기 실행 | **채택** |
+
+  근거는 실측이다. Django 6.1은 `django.tasks`(Task API·`ImmediateBackend`·`DummyBackend`·`TASKS`
+  설정)를 코어로 제공하되 실행 워커 백엔드는 없어, django-tasks-db 0.13.0(2026-08-28, BSD-3,
+  `find_spec("django.tasks")`로 코어 API에 붙음)을 쓴다. 분류자에 Django 6.0까지만 적혀 있어
+  6.1에서 `check`·`migrate`·enqueue·`db_worker --batch` 소비·결과 조회까지 먼저 돌려 보고 채택했다.
+  워커는 `select_for_update(skip_locked=True)` + claim으로 작업을 가져가므로 워커가 여럿이어도 한
+  작업은 한 워커만 집는다. 큐가 PostgreSQL 테이블이라 새 인프라 0, docker compose 변경 0(앱이
+  컨테이너화되어 있지 않아 워커도 runserver 옆의 호스트 프로세스). 한계: 작업 단위 하드 타임아웃
+  없음(아래), 폴링이라 픽업 지연 ≤ interval(기본 1초) | SFR-009, SEC-010
+- **확장 경로 — Celery가 필요해지면 세 곳만 바꾼다** | Django Tasks 프레임워크의 Celery 백엔드는
+  코어엔 없지만 서드파티가 있다(`django-tasks-celery` 0.1.1, `django-tasks-fennel` 0.1). 우리 코드는
+  `django.tasks`의 `@task`·`.enqueue()`만 쓰고 뷰·서비스의 조건부 UPDATE는 브로커와 무관하므로,
+  옮길 때 바꾸는 것은 (1) settings `TASKS.BACKEND` + 브로커 설정, (2) 워커 기동 명령
+  (`analysis_worker` → `celery worker`, 고착 정리는 Celery `worker_ready` 시그널로 이전), (3) compose에
+  Redis — 뿐이다. `analysis/tasks.py`·뷰·테스트(Immediate/Dummy)는 그대로다. 지금은 과잉이라 안
+  썼고, 필요하면 이렇게 간다 | SFR-009
+- **QUEUED 상태를 추가한다 — PENDING이 대기열을 겸할 수 없다** | PENDING은 "업로드됐고 아직 실행을
+  누르지 않음"이다. 화면의 실행 버튼은 PENDING·FAILED에만 보이는데 큐 대기를 PENDING으로 두면
+  대기 중에도 버튼이 떠 중복 등록을 유도하고, 사용자가 "안 눌렀음"과 "눌렀는데 기다리는 중"을
+  구분할 수 없다. 워커 1개에 여러 사용자가 겹치면 대기가 분 단위라 "대기열"과 "실행중"은 화면에서
+  갈라져야 한다. 전이는 PENDING → QUEUED → RUNNING → SUCCEEDED/FAILED(FAILED → QUEUED 재실행),
+  `queued_at`을 함께 기록한다(migration 0003). SFR-015 "4상태"는 5상태가 된다 | SFR-015
+- **조건부 UPDATE는 큐에서도 유효하다 — 전이마다 한 번씩, 두 지점** | 요청 측 `mark_queued`
+  (PENDING/FAILED→QUEUED)가 0행이면 409, 워커 측 `start_run`(QUEUED→RUNNING)이 0행이면 아무것도
+  하지 않는다. 큐는 최소 한 번 전달이라 같은 작업이 두 워커에 가거나 재전달될 수 있는데, 두 번째는
+  워커 측 UPDATE에서 빠져 Semgrep이 두 번 돌지 않는다(DB 백엔드의 SKIP LOCKED가 1차, 이 UPDATE가
+  2차). 순서는 "QUEUED UPDATE 커밋 → enqueue INSERT"이고 뷰가 autocommit이라 자연히 그렇다.
+  `transaction.on_commit`은 쓰지 않는다 — 뷰는 atomic 밖이라 이득이 없고 TestCase 안에서는 콜백이
+  실행되지 않아 실행 시험 전부가 깨진다. enqueue INSERT가 실패하면 QUEUED→PENDING으로 되돌린다 —
+  "작업 없는 QUEUED"는 버튼도 없고 워커도 안 집어 가 복구 경로가 사라진다 | SEC-009
+- **탐색에서 드러난 전제 수정 — 프론트는 폴링하지 않았다** | "프론트가 폴링으로 상태를 보니 화면은
+  크게 안 바뀔 것"이라는 전제로 시작했는데, 두 페이지의 `handleExecute`는 execute 응답을 `await`해
+  그 결과로 화면을 갱신할 뿐이었다(동기 실행이라 응답이 곧 완료였다). 큐로 바꾸면 응답이 QUEUED라
+  폴링을 새로 넣어야 완료를 안다 — 대기열·실행중이 있는 동안 3초 간격으로 목록/상세를 다시 읽고,
+  종료로 바뀌면 변화량·결과 목록을 갱신한다(`frontend/src/utils/runStatus.js`에 규칙 한 곳).
+  execute 응답 코드는 200→202(등록만 했으므로), 기존 시험의 단언 9줄이 그만큼 바뀌었다 | SFR-008
+- **워커가 안 떠 있을 때를 화면에서 구분한다 — 5분 이상 QUEUED면 "워커가 실행 중인지 확인"** |
+  개발 환경에서 워커를 안 띄운 채 실행을 누르면 QUEUED에 계속 머무는데, "처리 중"인지 "워커가
+  없어 안 도는지"는 화면만 봐선 구분이 안 된다. 서버 하트비트 API 없이 `queued_at`과의 시각 차이
+  (`QUEUED_STALE_MS` 5분)로 힌트를 띄운다 — 이 목적엔 시각 차이로 충분하고 부품을 늘릴 이유가 없다.
+  폴링이 3초마다 다시 그리므로 판정도 자연히 갱신된다 | SFR-015
+- **타임아웃은 subprocess 600초가 실제 상한, 워커 타임아웃은 두지 않는다. 대신 고착 정리를 워커
+  시작에 자동으로 붙인다** | 작업 안에서 시간이 긴 것은 Semgrep subprocess뿐이고 이미 `timeout=`으로
+  잘린다(표준화는 DB 작업). django-tasks-db엔 작업 단위 하드 리밋이 없고, 있어도 Windows에선 신호
+  기반이라 못 쓴다. 워커가 작업 중 죽으면(강제 종료·재시작) run이 RUNNING에 고착되는데 — 이미 아는
+  실패 유형(9/4) — `started_at`이 "타임아웃 + `ANALYSIS_STALE_RUN_GRACE`(300초)"보다 오래된 RUNNING을
+  FAILED("워커가 중단되어…")로 바꾼다. 수동 커맨드만 두면 아무도 돌리지 않으므로 `analysis_worker`
+  (django-tasks-db `db_worker` 상속)가 시작 시 한 번 돌린다 — 멱등이라 `--reload` 재시작마다 돌아도
+  무해. `db_worker`라는 이름을 덮어쓰지 않는 이유: Django는 INSTALLED_APPS 앞쪽 앱의 동명 커맨드가
+  이겨(`get_commands`가 reversed 순서로 update) 앱 순서에 묶인다. QUEUED는 정리하지 않는다 — 워커
+  1개에 여러 건이 밀리면 정상 대기가 임계보다 길 수 있고 큐에 작업이 남아 있는 한 결국 처리된다.
+  작업 함수는 `run_semgrep`의 예상 밖 예외를 FAILED로 기록한 뒤 다시 올려 큐 행에도 traceback이
+  남게 한다 | SEC-009
+- **동시 실행 수 = 워커 프로세스 수** | `db_worker` 한 프로세스는 한 번에 한 작업이다. 2건 동시면
+  `--worker-id`를 달리해 2개 띄운다. Semgrep이 기본으로 코어를 전부 쓰므로 노트북은 1, 서버는 코어
+  수를 보고 2~3. 애플리케이션 레벨 카운터(RUNNING 수 세기)는 같은 제한을 두 곳에서 관리하는
+  셈이라 두지 않는다 | SEC-009
+- **테스트는 immediate 백엔드로 — 기존 326개가 Redis·워커 없이 그대로 돈다** | `sys.argv[1:2] ==
+  ['test']`면 `ImmediateBackend`(해셔 스위치와 같은 자리). 요청 안에서 큐 등록→실행→결과까지 끝나
+  기존 실행 시험의 흐름이 유효하고, 바뀐 것은 응답 코드 단언 9줄뿐. 큐 등록 자체는
+  `override_settings(TASKS=Dummy)`로 검증(202·QUEUED·작업 1건·Semgrep 미호출·중복 409·enqueue 실패
+  시 PENDING 복귀). 실제 DB 백엔드 한 바퀴는 `TransactionTestCase` 1개 — 워커 루프가
+  `close_old_connections()`를 부르는데 TestCase의 트랜잭션 안에서는 autocommit 불일치로 연결을 닫아
+  버린다. Django 6.1은 `setting_changed`에 TASKS 리셋 수신자가 있어 override가 백엔드에 반영된다
+  (소스 확인). 신규 13개, 전체 339개(평소 326·Semgrep 13) | TST-004
+- **기존 동기 경로는 지운다 — "동기 모드"는 설정(`ANALYSIS_TASK_BACKEND=immediate`)이 대신한다** |
+  코드 경로는 하나(뷰는 항상 enqueue). 백엔드를 immediate로 두면 요청 안에서 끝나는 옛 동작이
+  되므로 "설정으로 전환 가능"과 "단순함"을 둘 다 얻는다. 기본값은 database. 워커를 안 띄우면
+  QUEUED에 머무는 것이 이 선택의 비용이고, 화면 힌트·README로 드러낸다 | SFR-009
+- **상한(200MB 업로드 / 500MB 해제 / 600초)은 이번엔 유지한다** | 큐 분리는 상한을 올릴 수 있게 하는
+  구조 변경이고, 실제 대형 업로드를 큐로 한 번 돌려 본 뒤(raw_result JSON 크기, DRF 업로드 메모리,
+  표준화 시간) 올린다. 질문에 나온 50/100/120은 옛 값이었다 | SEC-008

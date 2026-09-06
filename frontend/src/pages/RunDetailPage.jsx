@@ -8,6 +8,9 @@ import FindingStatusBadge, { FINDING_STATUS_LABELS } from '../components/Finding
 import SeverityBadge from '../components/SeverityBadge.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { formatDateTime, formatUser } from '../utils/format.js';
+import {
+  POLL_INTERVAL_MS, QUEUED_STALE_HINT, isInProgress, isQueuedTooLong,
+} from '../utils/runStatus.js';
 
 const PAGE_SIZE = 50; // 서버 FindingPagination.page_size와 동일
 const FINDING_STATUSES = Object.keys(FINDING_STATUS_LABELS); // OPEN, FALSE_POSITIVE, ACCEPTED
@@ -70,6 +73,9 @@ export default function RunDetailPage() {
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
   const [executing, setExecuting] = useState(false);
+  // 실행이 끝나 결과가 생기면 필터가 그대로여도 목록을 다시 읽어야 한다 — 이 값을 올려 아래
+  // findings 효과를 다시 돌린다.
+  const [resultsVersion, setResultsVersion] = useState(0);
 
   const loadRunAndSummary = useCallback(async () => {
     const [runData, summaryData] = await Promise.all([
@@ -99,7 +105,29 @@ export default function RunDetailPage() {
     api(`/api/analysis-runs/${id}/findings/?${params}`)
       .then(setFindings)
       .catch(() => setFindings({ count: 0, results: [] }));
-  }, [id, severity, findingStatus, page]);
+  }, [id, severity, findingStatus, page, resultsVersion]);
+
+  // 대기열·실행중이면 상태를 주기적으로 다시 읽는다 — 실행은 워커가 하므로 완료를 알 길이
+  // 폴링뿐이다. 종료 상태로 바뀌면 요약·결과 목록을 새로 읽고 필터를 처음으로 되돌린다.
+  const inProgress = run ? isInProgress(run.status) : false;
+  useEffect(() => {
+    if (!inProgress) return undefined;
+    const timer = setInterval(() => {
+      api(`/api/analysis-runs/${id}/`)
+        .then((next) => {
+          setRun(next);
+          if (!isInProgress(next.status)) {
+            loadRunAndSummary().catch(() => {});
+            setPage(1);
+            setSeverity('');
+            setFindingStatus('');
+            setResultsVersion((v) => v + 1);
+          }
+        })
+        .catch(() => {}); // 일시적 실패는 다음 폴링이 만회한다
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [id, inProgress, loadRunAndSummary]);
 
   const changeSeverity = (value) => {
     setSeverity(value);
@@ -125,11 +153,9 @@ export default function RunDetailPage() {
     setError('');
     setExecuting(true);
     try {
-      await api(`/api/analysis-runs/${id}/execute/`, { method: 'POST' });
-      await loadRunAndSummary();
-      setPage(1);
-      setSeverity('');
-      setFindingStatus('');
+      // 응답은 큐에 등록된 상태(QUEUED). 완료 뒤 결과 갱신은 위 폴링이 한다.
+      const queued = await api(`/api/analysis-runs/${id}/execute/`, { method: 'POST' });
+      setRun(queued);
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : '실행 요청에 실패했습니다.');
     } finally {
@@ -157,6 +183,7 @@ export default function RunDetailPage() {
         {run.original_filename}
         {run.created_by && <> · 실행자 {formatUser(run.created_by)}</>}
         {' '}· 업로드 {formatDateTime(run.created_at)}
+        {run.status === 'QUEUED' && run.queued_at && <> · 대기열 등록 {formatDateTime(run.queued_at)}</>}
         {run.finished_at && <> · 완료 {formatDateTime(run.finished_at)}</>}
         {run.status === 'SUCCEEDED' && (
           <>
@@ -166,11 +193,13 @@ export default function RunDetailPage() {
       </p>
 
       {error && <p className="form-error">{error}</p>}
+      {/* 폴링이 3초마다 다시 그리므로 "대기열에 오래 머묾" 판정도 자연히 갱신된다. */}
+      {isQueuedTooLong(run) && <p className="form-error">{QUEUED_STALE_HINT}</p>}
 
       {isAdmin && (run.status === 'PENDING' || run.status === 'FAILED') && (
         <p>
           <button type="button" className="btn btn-primary" disabled={executing} onClick={handleExecute}>
-            {executing ? '분석 중… (최대 10분)' : '분석 실행'}
+            {executing ? '등록 중…' : '분석 실행'}
           </button>
         </p>
       )}

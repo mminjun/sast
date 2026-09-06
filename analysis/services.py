@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import zipfile
+from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
@@ -215,20 +216,97 @@ def extract_zip_safely(uploaded_file, run):
                     dst.write(chunk)
 
 
-def start_run(run):
-    """PENDING/FAILED 상태에서만 RUNNING으로 전환한다 (SEC-009).
+def mark_queued(run):
+    """PENDING/FAILED 상태에서만 QUEUED로 전환한다 — 실행 요청 측 (SEC-009).
 
     상태 확인과 전환이 한 번의 조건부 UPDATE라 원자적이다 — 같은 run에 대한
-    거의 동시 실행 요청 두 건이 모두 통과해 Semgrep이 중복 실행되는 경합을
-    막는다 (secure-review 지적). 전환에 성공한 요청만 True를 받는다.
+    거의 동시 실행 요청 두 건이 모두 통과해 큐에 두 번 들어가는 경합을 막는다
+    (큐 도입 전 start_run이 하던 역할, secure-review 지적). 전환에 성공한 요청만
+    True를 받고 그 요청만 큐에 등록한다 (analysis/views.py).
     """
+    # FAILED 재실행이면 이전 실패의 흔적(사유·종료 시각)을 지운다 — 성공 저장은 raw_result·status·
+    # finished_at만 갱신하므로, 여기서 지우지 않으면 SUCCEEDED 응답에 옛 실패 사유가 남는다
+    # (2026-09-06 실증에서 발견: 고착 정리 뒤 재실행한 run이 완료됐는데 error_message가 그대로).
     updated = AnalysisRun.objects.filter(
         pk=run.pk,
         status__in=(AnalysisStatus.PENDING, AnalysisStatus.FAILED),
+    ).update(
+        status=AnalysisStatus.QUEUED,
+        queued_at=timezone.now(),
+        started_at=None,
+        finished_at=None,
+        error_message='',
+    )
+    if updated:
+        run.refresh_from_db()
+    return bool(updated)
+
+
+def unmark_queued(run):
+    """QUEUED를 PENDING으로 되돌린다 — 큐 등록(INSERT)이 실패했을 때의 복구.
+
+    되돌리지 않으면 "작업 없는 QUEUED"가 남아 화면은 대기열이라 하고 워커는 영영
+    집어 가지 않으며 실행 버튼도 없어 복구 경로가 사라진다.
+    """
+    updated = AnalysisRun.objects.filter(
+        pk=run.pk, status=AnalysisStatus.QUEUED,
+    ).update(status=AnalysisStatus.PENDING, queued_at=None)
+    if updated:
+        run.refresh_from_db()
+    return bool(updated)
+
+
+def start_run(run):
+    """QUEUED 상태에서만 RUNNING으로 전환한다 — 워커 측 (SEC-009).
+
+    큐는 최소 한 번 전달(at-least-once)이다: 워커가 여럿이거나 작업이 재전달되면
+    같은 run의 작업이 두 번 실행될 수 있다. DB 백엔드의 SKIP LOCKED가 1차 방어이고,
+    이 조건부 UPDATE가 2차 방어다 — 두 번째 전달은 status가 이미 RUNNING(또는 종료)
+    이라 0행이 되어 Semgrep을 돌리지 않는다 (analysis/tasks.py). 전환에 성공한
+    호출만 True를 받는다.
+    """
+    updated = AnalysisRun.objects.filter(
+        pk=run.pk, status=AnalysisStatus.QUEUED,
     ).update(status=AnalysisStatus.RUNNING, started_at=timezone.now())
     if updated:
         run.refresh_from_db()
     return bool(updated)
+
+
+STALE_RUN_MESSAGE = '워커가 중단되어 실행이 완료되지 못했습니다. 다시 실행하세요.'
+
+
+def stale_run_threshold(now=None):
+    """이 시각보다 먼저 시작된 RUNNING은 고착으로 본다.
+
+    Semgrep 타임아웃(실행이 정상적으로 걸릴 수 있는 최대 시간)에 여유를 더한다 —
+    표준화(ingest)·DB 저장이 뒤따르므로 타임아웃 직후를 고착으로 오판하지 않게.
+    """
+    now = now or timezone.now()
+    return now - timedelta(
+        seconds=settings.ANALYSIS_SEMGREP_TIMEOUT + settings.ANALYSIS_STALE_RUN_GRACE,
+    )
+
+
+def reap_stale_runs(now=None):
+    """워커가 작업 중 죽어 RUNNING에 남은 실행을 FAILED로 정리한다. 정리한 건수를 돌려준다.
+
+    워커 프로세스가 작업 도중 종료되면(강제 종료, 재시작) 큐 쪽 작업 행은 남지만 run은
+    RUNNING에 고착되고, 실행 버튼은 PENDING·FAILED에만 보여 사용자가 복구할 길이 없다.
+    수동 커맨드만 두면 아무도 돌리지 않으므로 워커 시작 시 자동으로 부른다
+    (analysis/management/commands/analysis_worker.py). 멱등이라 재시작마다 돌아도 무해하다.
+
+    QUEUED는 건드리지 않는다 — 워커 1개에 여러 건이 밀리면 정상 대기가 임계보다 길 수 있고,
+    큐에 작업이 남아 있는 한 워커가 결국 집어 간다.
+    """
+    return AnalysisRun.objects.filter(
+        status=AnalysisStatus.RUNNING,
+        started_at__lt=stale_run_threshold(now),
+    ).update(
+        status=AnalysisStatus.FAILED,
+        error_message=STALE_RUN_MESSAGE,
+        finished_at=now or timezone.now(),
+    )
 
 
 def _scan_target_presence(target, suffixes, exclude_paths):

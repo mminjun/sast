@@ -102,6 +102,28 @@ python manage.py runserver
 API 서버가 `http://127.0.0.1:8000`에서 뜹니다. 프론트 dev 서버가 `/api` 요청을
 여기로 프록시하므로 **백엔드를 먼저 띄운 상태**에서 프론트를 실행합니다.
 
+### 7-1. 분석 워커 기동
+
+새 터미널에서 (venv 활성화 — 워커가 Semgrep을 실행하므로 `semgrep`이 PATH에 있어야 합니다):
+
+```bash
+python manage.py analysis_worker
+```
+
+분석 실행 요청은 큐에 등록만 하고(상태 `대기열`) 이 워커가 순서대로 처리합니다. 큐는
+PostgreSQL 테이블(`django-tasks-db`)이라 Redis 같은 별도 서비스는 없습니다. **워커를 띄우지
+않으면 실행이 대기열에 머물고**, 5분이 지나면 화면이 "워커가 실행 중인지 확인하세요"라고
+알립니다. `DJANGO_DEBUG=True`면 워커도 코드 변경 시 자동 재시작됩니다.
+
+- **동시 실행 수 = 워커 프로세스 수.** 한 워커는 한 번에 한 건만 처리합니다. Semgrep이
+  코어를 전부 쓰므로 노트북은 1개, 서버는 코어 수를 보고 2~3개
+  (`--worker-id`를 서로 다르게 주어 여러 개 실행).
+- 워커가 작업 도중 종료되면 그 실행은 `실행중`에 남는데, 워커를 다시 시작하면 시작 시
+  자동으로 `실패`("워커가 중단되어…")로 정리되어 재실행할 수 있습니다
+  (`python manage.py reap_stale_runs`로 수동 정리도 가능).
+- 워커 없이 요청 안에서 동기 실행하려면 `.env`에 `ANALYSIS_TASK_BACKEND=immediate`
+  (큐 도입 전과 같은 동작, 테스트가 이 모드로 돕니다).
+
 ### 8. 프론트엔드 기동
 
 새 터미널에서:
@@ -125,6 +147,7 @@ python manage.py migrate          # 4. 스키마
 python manage.py seed_catalog     # 5. 진단 기준 49개
 python manage.py createsuperuser  # 6. admin 계정
 python manage.py runserver        # 7. 백엔드 (127.0.0.1:8000)
+python manage.py analysis_worker  # 7-1. 분석 워커 (새 터미널, venv 활성화)
 cd frontend && npm install && npm run dev   # 8. 프론트 (localhost:5173)
 ```
 
