@@ -45,7 +45,7 @@ from .services import (
     workspace_dir,
 )
 from .taint import analyze_directory, analyze_source
-from .taint.python_analyzer import LOOP_PASSES
+from .taint.python_analyzer import LOOP_PASSES, SUMMARY_PASSES
 from .tasks import run_analysis
 
 User = get_user_model()
@@ -1456,6 +1456,7 @@ class CustomTaintEngineTests(SimpleTestCase):
             'source': {'path': 'pkg/app.py', 'line': 3, 'code': 'def f(host):'},
             'steps': [{'path': 'pkg/app.py', 'line': 4, 'code': 'cmd = "ping " + host'}],
             'sink': {'path': 'pkg/app.py', 'line': 5, 'code': 'os.system(cmd)'},
+            'paths_count': 1,
         })
 
     def test_syntax_error_and_non_python_do_not_stop_the_run(self):
@@ -1565,3 +1566,250 @@ class ExecuteAnalysisTests(AnalysisTestCase):
         stats = response.data['custom_taint_stats']
         self.assertEqual(stats['analyzed'], 1)
         self.assertIn('semgrep_only', stats)  # 표준화가 병합 통계를 덧붙인다
+
+
+# ---------------------------------------------------------------------------
+# 자체 taint 엔진 — 2단계 같은 파일 함수 간 (docs/decisions.md 2026-09-06 custom-taint 2단계)
+# ---------------------------------------------------------------------------
+
+def _roles(finding):
+    return [s.get('role') for s in finding.taint.steps]
+
+
+class InterproceduralSummaryTests(SimpleTestCase):
+    """함수 요약(매개변수→반환·매개변수→싱크·본문 안 입력→반환)과 고정점."""
+
+    def test_return_chain_is_followed_with_full_trace(self):
+        # 6단계 반환 체인 — 여러 줄 함수라 경로 노드가 전부 남는다.
+        source = '''
+            import os
+            def c1(x):
+                return c2(x)
+            def c2(x):
+                return c3(x)
+            def c3(x):
+                return c4(x)
+            def c4(x):
+                return c5(x)
+            def c5(x):
+                return c6(x)
+            def c6(x):
+                return "ping " + x
+            def view(request):
+                q = request.GET.get("q")
+                os.system(c1(q))
+        '''
+        finding = _traces(source)[17]
+        self.assertEqual(finding.taint.kind, 'input')
+        self.assertEqual(finding.taint.source['line'], 16)
+        self.assertEqual(
+            [(s.get('role'), s['line']) for s in finding.taint.steps],
+            [('call', 17), ('enter', 3), ('call', 4), ('enter', 5), ('call', 6), ('enter', 7), ('call', 8),
+             ('enter', 9), ('call', 10), ('enter', 11), ('call', 12), ('enter', 13), ('return', 14)],
+        )  # 되돌아오는 return 줄들은 이미 있는 call 줄과 같아 표시 중복이라 생략된다
+
+    def test_chain_beyond_summary_pass_limit_is_documented(self):
+        # SUMMARY_PASSES패스에 체인이 한 단계씩 번진다 — 상한-1 단계까지 완전하고 그보다 긴 체인은 놓친다.
+        # "여기서부터 못 잡는다"를 고정: 상한을 바꾸면 이 시험이 알려준다.
+        def chain(depth):
+            funcs = ''.join(f'def c{i}(x):\n    return c{i + 1}(x)\n' for i in range(1, depth))
+            funcs += f'def c{depth}(x):\n    return "ping " + x\n'
+            return f'import os\n{funcs}def view(request):\n    os.system(c1(request.GET.get("q")))\n'
+        self.assertEqual(SUMMARY_PASSES, 16)
+        within = analyze_source(chain(SUMMARY_PASSES - 1), 'app.py')
+        beyond = analyze_source(chain(SUMMARY_PASSES + 2), 'app.py')
+        self.assertEqual(len(within), 1)
+        self.assertEqual(len(beyond), 0)
+
+    def test_direct_recursion_with_base_case_propagates(self):
+        source = '''
+            import os
+            def rec(x, n):
+                if n == 0:
+                    return x
+                return rec(x, n - 1)
+            def view(request):
+                os.system(rec(request.GET.get("q"), 3))
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 8)})
+
+    def test_mutual_recursion_without_base_case_is_clean_and_terminates(self):
+        # 요약이 아직 없는 함수는 빈 요약(전파 없음)으로 본다 — 영원히 돌아오지 않는 함수는 깨끗하다.
+        source = '''
+            import os
+            def a(x):
+                return b(x)
+            def b(x):
+                return a(x)
+            def view(request):
+                os.system(a(request.GET.get("q")))
+        '''
+        self.assertEqual(_sinks(source), set())
+
+    def test_call_before_definition(self):
+        source = '''
+            import os
+            def view(request):
+                os.system(later(request.GET.get("q")))
+            def later(x):
+                return "ping " + x
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 4)})
+
+    def test_keyword_arguments_map_to_parameters_and_defaults_are_constants(self):
+        source = '''
+            import os
+            def build(prefix, host="localhost", flag="-c 1"):
+                return prefix + host + flag
+            def a(request):
+                os.system(build("ping ", host=request.GET.get("h")))
+            def b(request):
+                os.system(build("ping ", flag=request.GET.get("f")))
+            def c(request):
+                os.system(build("ping "))
+        '''
+        self.assertEqual({line for _, line in _sinks(source)}, {6, 8})
+
+    def test_body_beats_name_convention_for_module_functions(self):
+        source = '''
+            import os
+            def sanitize_cmd(x):
+                return x
+            def validate_host(h):
+                if h not in ALLOWED:
+                    raise ValueError
+                return h
+            def clean(x):
+                return int(x)
+            def discard(x):
+                log(x)
+                return "ok"
+            def lie(request):
+                os.system(sanitize_cmd(request.GET.get("q")))
+            def honest(request):
+                os.system(validate_host(request.GET.get("h")))
+            def body_clean(request):
+                os.system(f"nc {clean(request.GET.get('p'))}")
+            def body_discard(request):
+                os.system(discard(request.GET.get("q")))
+            def imported(request):
+                os.system(sanitize_external(request.GET.get("q")))
+        '''
+        # 이름이 거짓말하는 sanitize_cmd만 잡히고, 본문이 씻는 세 헬퍼는 깨끗. 정의가 없는 sanitize_external은
+        # 이름 규약이 그대로 적용된다.
+        self.assertEqual(_sinks(source), {('IV-05', 15)})
+
+    def test_input_inside_helper_reaches_caller_sink(self):
+        source = '''
+            import os
+            def read_cmd():
+                line = input()
+                return line
+            def cfg():
+                return os.environ["CMD"]
+            def a():
+                os.system(read_cmd())
+            def b():
+                target = cfg()
+                os.system(target)
+        '''
+        traces = _traces(source)
+        self.assertEqual(set(traces), {9, 12})
+        self.assertEqual(traces[9].taint.source['line'], 4)
+        self.assertEqual(_roles(traces[12]), ['return'])  # cfg() 호출 줄(= 대입 줄)로 돌아온다
+
+    def test_helper_sink_reported_with_caller_origin_and_paths_count(self):
+        source = '''
+            import os
+            def run(cmd):
+                os.system(cmd)
+            def a(request):
+                q = request.GET.get("q")
+                run(q)
+            def b(other):
+                run(other)
+        '''
+        finding = _traces(source)[4]
+        self.assertEqual(finding.taint.kind, 'input')
+        self.assertEqual(finding.taint.source['line'], 6)
+        self.assertEqual([(s.get('role'), s['line']) for s in finding.taint.steps], [('call', 7), ('enter', 3)])
+        self.assertEqual(finding.paths_count, 3)  # run 자신(매개변수) + 호출자 2
+
+    def test_same_kind_prefers_longer_trace(self):
+        source = '''
+            import os
+            def run(cmd):
+                os.system(cmd)
+            def caller(value):
+                cmd = "ping " + value
+                run(cmd)
+        '''
+        finding = _traces(source)[4]
+        self.assertEqual(finding.taint.kind, 'param')
+        self.assertEqual(finding.taint.source['line'], 5)  # caller의 def — 경로가 더 길다
+
+    def test_redefinition_uses_last_definition(self):
+        source = '''
+            import os
+            def helper(x):
+                return "ok"
+            def helper(x):
+                return x
+            def view(request):
+                os.system(helper(request.GET.get("q")))
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 8)})
+
+    def test_nested_function_is_an_unknown_call(self):
+        source = '''
+            import os
+            def view(request):
+                def helper(x):
+                    return "ok"
+                os.system(helper(request.GET.get("q")))
+        '''
+        self.assertEqual(_sinks(source), {('IV-05', 6)})  # 클로저는 요약에 없어 모르는 호출로 전파(범위 밖)
+
+    def test_method_call_chain_target_is_a_sink(self):
+        # `conn.cursor().execute(...)` — 대상이 호출 결과여도 끝 이름으로 싱크가 맞는다(2단계 샘플에서 빠졌던 형태).
+        source = '''
+            def q(conn, request):
+                conn.cursor().execute("SELECT " + request.GET.get("q"))
+        '''
+        self.assertEqual(_sinks(source), {('IV-01', 3)})
+
+    def test_mutual_recursion_with_multiple_returns_converges_below_cap(self):
+        # Django db/models/sql/query.py의 rename_prefix_from_q ↔ get_child_with_renamed_prefix 형태 — 새 요약만 쓰면
+        # 대표 경로가 패스마다 바뀌어(경유 5 ↔ 8) 상한 16까지 진동했다. 요약을 이전 패스와 합쳐(긴 경로 유지) 단조로
+        # 만든 뒤에는 몇 패스 안에 멈춘다.
+        root = Path(tempfile.mkdtemp(prefix='custom-taint-'))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / 'app.py').write_text(textwrap.dedent('''
+            import os
+            def rename(prefix, child):
+                if isinstance(child, list):
+                    return rename_all(prefix, child)
+                if isinstance(child, tuple):
+                    lhs, rhs = child
+                    if lhs.startswith(prefix):
+                        lhs = lhs.replace(prefix, "x", 1)
+                    rhs = rename(prefix, rhs)
+                    return lhs, rhs
+                return child
+            def rename_all(prefix, q):
+                return [rename(prefix, c) for c in q]
+            def view(request):
+                os.system(rename(request.GET.get("p"), request.GET.get("c")))
+        '''), encoding='utf-8')
+        result = analyze_directory(root)
+        self.assertLess(result['stats']['summary_passes'], SUMMARY_PASSES)
+        self.assertEqual([i['start']['line'] for i in result['results']], [16])
+
+    def test_engine_reports_summary_passes(self):
+        root = Path(tempfile.mkdtemp(prefix='custom-taint-'))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / 'app.py').write_text('import os\ndef a(x):\n    return b(x)\ndef b(x):\n    return x\ndef v(r):\n    os.system(a(r.GET.get("q")))\n', encoding='utf-8')
+        result = analyze_directory(root)
+        # a→b 체인 + v의 요약이 a의 경로를 이어받아 자라므로 3~4패스에 안정된다. 상한에는 닿지 않는다.
+        self.assertGreaterEqual(result['stats']['summary_passes'], 3)
+        self.assertLess(result['stats']['summary_passes'], SUMMARY_PASSES)

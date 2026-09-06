@@ -524,3 +524,14 @@
   후 6건 일치. 루프 상한은 2에서 3으로(사용자 판단: 비용 0·미탐 우선) — 3단계 체인 잡힘·4단계 못 잡음을 시험으로
   고정하고 고정점까지 안 간 이유와 함께 decisions에 기록. 테스트: 신규 40(전파 7·sanitizer 4·제어 흐름 6·엔진 4·
   파이프라인 6·병합 8·정합성 3·동등성 2 — 실제 Semgrep 2 포함)
+- 자체 taint 2단계(feature/custom-taint-inter): Plan Mode에서 프로토타입(1단계 엔진 사본 + 요약 고정점)을 Semgrep
+  taint와 나란히 돌려 원래 가정("함수 간 = recall 확장")이 틀렸음을 확인 — 매개변수 소스 설계에선 헬퍼 싱크·반환
+  경유를 Semgrep도 잡는다. 성과를 N(이름 규약 거짓말 헬퍼·헬퍼 안 입력→반환 = recall)·M(본문이 씻는 헬퍼의 Semgrep
+  오탐 제거 = precision)·경로 품질로 다시 정의하고 승인. 구현: `Summary`(param→return·param→sinks·return_taint,
+  shape에 경유 노드 수), 고정점 반복(`SUMMARY_PASSES=16`, 요약이 없는 함수는 빈 요약), 위치·키워드 인자 매핑, 같은
+  파일 함수는 본문만(이름 규약은 정의 없는 호출에만), 경로 노드 `role`(call/enter/return)과 `paths_count`(형식은
+  `alternatives`로 열어 둠), 화면 라벨. 샘플 `taint_inter_vulnerable.py`(8건)/`taint_inter_safe.py`. 실측 N=4·M=5,
+  `InterproceduralTests`가 세 숫자를 고정(M 시험의 실패 메시지에 "Semgrep이 좋아진 것" 맥락과 버전). 구현 중 잡은
+  결함 셋: 반환식의 첫 매개변수만 기록(→ `taints_of`로 전부), `conn.cursor().execute` 싱크 누락(점 표기가 Call에서
+  끊김, 1단계부터 있던 잠재 결함), Django 스트레스에서 상호 재귀 요약이 5↔8로 진동해 상한에 닿음(→ 이전 패스와
+  합쳐 단조, 5패스 수렴). 성능: 저장소 1.0초·zip 0.2초·Django 906파일 4.1초. 테스트: 신규 18(요약 15·catalog 3), 전체 415개 통과

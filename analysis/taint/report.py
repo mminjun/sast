@@ -14,7 +14,13 @@ def check_id(kisa_code):
 
 def to_item(finding, abs_path):
     """Finding 1건 → Semgrep 결과 item. path는 Semgrep처럼 절대경로(표준화가 격리 루트 기준 상대경로로 바꾼다)."""
-    source = {k: v for k, v in finding.taint.source.items() if k in ('path', 'line', 'code')}
+    source = {k: v for k, v in finding.taint.source.items() if k in ('path', 'line', 'code', 'role')}
+    sink = finding.sink
+    # 싱크와 같은 줄의 경유(같은 줄에서 호출하고 바로 싱크에 넣는 `os.system(helper(x))`의 '반환' 노드)는 표시 중복이다.
+    steps = [
+        dict(step) for step in finding.taint.steps
+        if not (step['line'] == sink['line'] and step['path'] == sink['path'])
+    ]
     return {
         'check_id': check_id(finding.kisa_code),
         'path': abs_path,
@@ -30,8 +36,11 @@ def to_item(finding, abs_path):
             },
             'taint_trace': {
                 'source': source,
-                'steps': [dict(step) for step in finding.taint.steps],
-                'sink': dict(finding.sink),
+                'steps': steps,
+                'sink': dict(sink),
+                # 같은 싱크에 도달한 경로 수 — 대표 1개만 담는다. 나중에 전체를 담을 때는 여기에
+                # 'alternatives': [trace, ...]를 더한다(기존 소비자는 source/steps/sink만 본다).
+                'paths_count': finding.paths_count,
             },
         },
     }
