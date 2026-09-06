@@ -918,13 +918,21 @@ class QueueEnqueueTests(AnalysisTestCase):
         self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
         self.assertEqual(len(default_task_backend.results), 1)
 
-    def test_failed_run_can_be_requeued(self):
-        AnalysisRun.objects.filter(pk=self.run_id).update(status=AnalysisStatus.FAILED)
+    def test_failed_run_can_be_requeued_and_old_failure_is_cleared(self):
+        # 재실행 시 이전 실패의 사유·시각이 남으면 완료된 run의 응답에 옛 실패 사유가 실린다
+        # (2026-09-06 실증에서 발견 — 고착 정리 뒤 재실행이 완료됐는데 error_message가 그대로).
+        AnalysisRun.objects.filter(pk=self.run_id).update(
+            status=AnalysisStatus.FAILED, error_message='이전 실패',
+            started_at=timezone.now(), finished_at=timezone.now(),
+        )
 
         response = self.client.post(execute_url(self.run_id))
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data['status'], AnalysisStatus.QUEUED)
+        self.assertEqual(response.data['error_message'], '')
+        self.assertIsNone(response.data['started_at'])
+        self.assertIsNone(response.data['finished_at'])
 
     def test_enqueue_failure_reverts_run_to_pending(self):
         # 큐 등록(INSERT)이 실패하면 "작업 없는 QUEUED"가 남아 복구 경로가 사라진다 —

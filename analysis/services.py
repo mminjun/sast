@@ -224,10 +224,19 @@ def mark_queued(run):
     (큐 도입 전 start_run이 하던 역할, secure-review 지적). 전환에 성공한 요청만
     True를 받고 그 요청만 큐에 등록한다 (analysis/views.py).
     """
+    # FAILED 재실행이면 이전 실패의 흔적(사유·종료 시각)을 지운다 — 성공 저장은 raw_result·status·
+    # finished_at만 갱신하므로, 여기서 지우지 않으면 SUCCEEDED 응답에 옛 실패 사유가 남는다
+    # (2026-09-06 실증에서 발견: 고착 정리 뒤 재실행한 run이 완료됐는데 error_message가 그대로).
     updated = AnalysisRun.objects.filter(
         pk=run.pk,
         status__in=(AnalysisStatus.PENDING, AnalysisStatus.FAILED),
-    ).update(status=AnalysisStatus.QUEUED, queued_at=timezone.now())
+    ).update(
+        status=AnalysisStatus.QUEUED,
+        queued_at=timezone.now(),
+        started_at=None,
+        finished_at=None,
+        error_message='',
+    )
     if updated:
         run.refresh_from_db()
     return bool(updated)
