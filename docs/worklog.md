@@ -443,3 +443,7 @@
   건너뛰도록 함(테스트 포함). 실제 Semgrep 테스트는 작업 영역을 `git init` 해 실서버 조건 재현.
   runserver 정리 요청: 4개 PID가 전부 이 세션의 한 서버(StatReloader 재시작 체인)라 이전 세션
   잔여 프로세스는 없었음. PR #8 게이트 통과
+- `.env` 사고 처리: 도그푸딩 zip에 `.env`가 들어가 run 49~52 작업 영역에 복사돼 있던 것을 삭제.
+  커밋 이력 없음 확인(`git log -- .env` 빈 결과). `scripts/make_selfscan_zip.py` 추가 — git 추적
+  파일만 + DENY 이름 재검사, 실행 결과 170개 파일·`.env.example`만 포함. decisions에 8/27
+  `.gitignore` 사고와 9/6 `--project-root` 사고를 "작업 영역이 저장소 내부" 계열로 묶어 기록
