@@ -12,8 +12,10 @@ Semgrep 실제 실행은 subprocess.run을 모킹해 CI·바이너리 유무와 
 
 import io
 import json
+import os
 import shutil
 import stat
+import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
@@ -648,6 +650,10 @@ class ExcludePathsExecuteTests(AnalysisTestCase):
         self.assertIn('--exclude=tests.py', args)
         # 대상 경로는 마지막 인자 — 제외 옵션이 대상 뒤에 붙어 무시되지 않는다.
         self.assertLess(args.index('--exclude=tests.py'), len(args) - 1)
+        # 프로젝트 루트를 소스 디렉토리로 고정해야 `/`가 든 패턴이 zip 루트에 앵커된다 —
+        # 없으면 Semgrep이 위로 .git을 찾아 우리 저장소를 루트로 삼는다 (run 51 사고).
+        run = AnalysisRun.objects.get(pk=run_id)
+        self.assertIn(f'--project-root={os.path.abspath(source_dir(run))}', args)
 
     @patch('analysis.services.subprocess.run')
     def test_empty_exclude_paths_adds_no_exclude_argument(self, mock_run):
@@ -729,12 +735,20 @@ class ExcludePathsExecuteTests(AnalysisTestCase):
         mock_run.assert_not_called()
 
     @skipUnless(SEMGREP_AVAILABLE, 'semgrep 바이너리가 없어 실제 제외 동작은 건너뛴다')
-    def test_real_semgrep_skips_excluded_files(self):
+    def test_real_semgrep_skips_excluded_files_even_inside_a_git_repo(self):
         # 실제 Semgrep 실행: 제외된 디렉토리의 취약 코드는 결과에 나오지 않는다.
-        self.project_a.exclude_paths = ['samples']
+        # 작업 영역을 git 저장소 안에 둔다 — 실서버(media/가 이 저장소 아래)와 같은 조건.
+        # --project-root 없이는 Semgrep이 위의 .git을 루트로 삼아 `/`가 든 패턴이 저장소
+        # 기준으로 앵커되고 제외가 통째로 무시됐다 (2026-09-06 run 51: 229건 그대로).
+        subprocess.run(['git', 'init', '-q', str(self.tmp_root)], check=True, capture_output=True)
+        self.project_a.exclude_paths = ['catalog/samples', 'tests.py']
         self.project_a.save()
         vulnerable = 'import subprocess\nsubprocess.call(input(), shell=True)\n'
-        run_id = self._upload({'app.py': vulnerable, 'samples/v.py': vulnerable})
+        run_id = self._upload({
+            'app.py': vulnerable,
+            'catalog/samples/v.py': vulnerable,
+            'pkg/tests.py': vulnerable,
+        })
 
         response = self.client.post(execute_url(run_id))
 
@@ -744,7 +758,21 @@ class ExcludePathsExecuteTests(AnalysisTestCase):
         }
         self.assertTrue(paths, '취약 코드가 있는 app.py에서 결과가 나와야 한다')
         self.assertTrue(all(p.endswith('/app.py') for p in paths), paths)
-        self.assertFalse(any('/samples/' in p for p in paths), paths)
+        self.assertFalse(any('/samples/' in p or p.endswith('/tests.py') for p in paths), paths)
+
+    def test_semgrepignore_inside_zip_is_not_extracted(self):
+        # 업로드 안 .semgrepignore는 Semgrep이 루트에서 읽어 파일을 조용히 빼므로 추출하지
+        # 않는다 — 검사에서 빠지는 경로는 프로젝트의 분석 제외 경로 한 곳에서만 정한다.
+        run_id = self._upload({
+            'app.py': 'x = 1\n',
+            '.semgrepignore': 'app.py\n',
+            'sub/.semgrepignore': 'app.py\n',
+        })
+
+        root = source_dir(AnalysisRun.objects.get(pk=run_id))
+        self.assertTrue((root / 'app.py').exists())
+        self.assertFalse((root / '.semgrepignore').exists())
+        self.assertFalse((root / 'sub' / '.semgrepignore').exists())
 
 
 class AccessLogTests(AnalysisTestCase):

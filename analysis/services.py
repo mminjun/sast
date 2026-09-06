@@ -63,6 +63,12 @@ def source_dir(run):
 MACOS_METADATA_DIR = '__MACOSX'
 MACOS_METADATA_FILES = ('.DS_Store',)
 MACOS_METADATA_PREFIX = '._'
+# 업로드 안의 `.semgrepignore`는 추출하지 않는다. Semgrep은 프로젝트 루트(= 소스 디렉토리,
+# run_semgrep의 --project-root)의 이 파일을 읽어 대상을 조용히 뺀다 — 무엇이 검사에서
+# 빠졌는지는 프로젝트의 분석 제외 경로 한 곳에서만 정해지고 화면에 보여야 한다
+# (2026-09-06 실측: 루트 지정 시 hidden/ 항목이 결과에서 사라짐). `.gitignore`는
+# --no-git-ignore로 이미 무시한다.
+SCAN_CONTROL_FILES = ('.semgrepignore',)
 # PostgreSQL text/jsonb는 NUL(U+0000)을 저장하지 못한다. 외부 도구 출력과 고객 소스에서
 # 온 문자열은 저장 전에 걷어낸다 (방어선 — 위 메타데이터 제외가 근본 해결).
 NUL = chr(0)
@@ -184,6 +190,8 @@ def extract_zip_safely(uploaded_file, run):
         written_size = 0
         for info in infolist:
             if info.is_dir() or is_macos_metadata(info.filename):
+                continue
+            if Path(info.filename).name in SCAN_CONTROL_FILES:
                 continue
             target = (dest_root / info.filename).resolve()
             # 260자 넘는 경로도 만들 수 있도록 확장 경로로 생성한다 (fs_path 참고).
@@ -307,6 +315,13 @@ def run_semgrep(run):
                 # `/`가 든 값은 대상 루트 기준, 없는 값은 어느 깊이의 이름이든 매칭
                 # (Semgrep 1.175.0 실측 — docs/decisions.md 2026-09-05).
                 *[f'--exclude={pattern}' for pattern in exclude_paths],
+                # 프로젝트 루트를 소스 디렉토리로 고정한다. 지정하지 않으면 Semgrep이 대상에서
+                # 위로 `.git`을 찾아 루트로 삼는데, 작업 영역이 이 저장소 아래(media/)라 루트가
+                # 우리 저장소가 되어 `/`가 든 제외 패턴(catalog/samples)이 저장소 기준으로
+                # 앵커돼 고객 소스의 catalog/samples를 빼지 못했다 (2026-09-06 도그푸딩 run 51,
+                # 229건 그대로). 루트는 확장 경로를 받지 않으므로 일반 절대 경로로 넘긴다
+                # (대상은 확장 경로 그대로 — 둘의 조합은 실측으로 확인).
+                f'--project-root={os.path.abspath(source_dir(run))}',
                 str(target),
             ],
             capture_output=True,
