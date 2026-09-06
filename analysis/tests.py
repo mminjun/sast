@@ -12,11 +12,14 @@ Semgrep 실제 실행은 subprocess.run을 모킹해 CI·바이너리 유무와 
 
 import io
 import json
+import os
 import shutil
 import stat
+import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
+from unittest import skipUnless
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -35,6 +38,9 @@ from .services import fs_path, source_dir, workspace_dir
 User = get_user_model()
 
 PASSWORD = 'sast-test-pw-9182'
+
+# 실제 Semgrep을 돌리는 시험은 바이너리가 있을 때만 (catalog/tests.py와 같은 방식).
+SEMGREP_AVAILABLE = shutil.which('semgrep') is not None
 
 
 def list_url(project_id):
@@ -604,6 +610,169 @@ class ExecuteStatusTests(AnalysisTestCase):
 
         self.assertEqual(retry.status_code, status.HTTP_200_OK)
         self.assertEqual(retry.data['status'], AnalysisStatus.SUCCEEDED)
+
+
+class ExcludePathsExecuteTests(AnalysisTestCase):
+    """프로젝트별 분석 제외 경로가 실행에 반영되는가 (RFP 외 자체 개선).
+
+    Semgrep 인자 전달은 모킹으로, 실제 제외 동작은 바이너리가 있을 때 한 번 실증한다.
+    """
+
+    def _upload(self, entries):
+        self.login(self.admin)
+        response = self.client.post(
+            list_url(self.project_a.pk),
+            {'file': upload_file(entries=entries)},
+            format='multipart',
+        )
+        return response.data['id']
+
+    def _succeed(self, mock_run):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = json.dumps({'results': [], 'errors': []})
+        mock_run.return_value.stderr = ''
+
+    def _semgrep_args(self, mock_run):
+        return mock_run.call_args.args[0]
+
+    @patch('analysis.services.subprocess.run')
+    def test_exclude_paths_become_semgrep_exclude_arguments(self, mock_run):
+        self.project_a.exclude_paths = ['catalog/samples', 'tests.py']
+        self.project_a.save()
+        run_id = self._upload({'app.py': 'eval(input())\n', 'catalog/samples/v.py': 'x = 1\n'})
+        self._succeed(mock_run)
+
+        response = self.client.post(execute_url(run_id))
+
+        self.assertEqual(response.data['status'], AnalysisStatus.SUCCEEDED)
+        args = self._semgrep_args(mock_run)
+        self.assertIn('--exclude=catalog/samples', args)
+        self.assertIn('--exclude=tests.py', args)
+        # 대상 경로는 마지막 인자 — 제외 옵션이 대상 뒤에 붙어 무시되지 않는다.
+        self.assertLess(args.index('--exclude=tests.py'), len(args) - 1)
+        # 프로젝트 루트를 소스 디렉토리로 고정해야 `/`가 든 패턴이 zip 루트에 앵커된다 —
+        # 없으면 Semgrep이 위로 .git을 찾아 우리 저장소를 루트로 삼는다 (run 51 사고).
+        run = AnalysisRun.objects.get(pk=run_id)
+        self.assertIn(f'--project-root={os.path.abspath(source_dir(run))}', args)
+
+    @patch('analysis.services.subprocess.run')
+    def test_empty_exclude_paths_adds_no_exclude_argument(self, mock_run):
+        self.assertEqual(self.project_a.exclude_paths, [])
+        run_id = self._upload({'app.py': 'eval(input())\n'})
+        self._succeed(mock_run)
+
+        self.client.post(execute_url(run_id))
+
+        self.assertFalse(any(a.startswith('--exclude') for a in self._semgrep_args(mock_run)))
+
+    @patch('analysis.services.subprocess.run')
+    def test_exclude_paths_are_read_at_execution_time(self, mock_run):
+        # 업로드 뒤에 제외 경로를 바꿔도 실행에 반영된다 — 실행 시점 설정을 읽는다.
+        run_id = self._upload({'app.py': 'eval(input())\n'})
+        self.project_a.exclude_paths = ['vendor']
+        self.project_a.save()
+        self._succeed(mock_run)
+
+        self.client.post(execute_url(run_id))
+
+        self.assertIn('--exclude=vendor', self._semgrep_args(mock_run))
+
+    @patch('analysis.services.subprocess.run')
+    def test_everything_excluded_marks_failed_without_running_semgrep(self, mock_run):
+        # 제외 후 대상이 0개면 빈 zip과 같은 함정(exit 0·0건 SUCCEEDED)이라 실패로 기록하되,
+        # 원인이 zip이 아니라 제외 설정임을 메시지로 알린다.
+        self.project_a.exclude_paths = ['samples', 'tests.py']
+        self.project_a.save()
+        run_id = self._upload({'samples/v.py': 'x\n', 'pkg/tests.py': 'y\n', 'README.md': '#\n'})
+
+        response = self.client.post(execute_url(run_id))
+
+        self.assertEqual(response.data['status'], AnalysisStatus.FAILED)
+        message = AnalysisRun.objects.get(pk=run_id).error_message
+        self.assertIn('제외 경로를 적용하면', message)
+        self.assertIn('samples', message)
+        mock_run.assert_not_called()
+
+    @patch('analysis.services.subprocess.run')
+    def test_zip_without_sources_keeps_original_message_even_with_excludes(self, mock_run):
+        # 제외와 무관하게 애초에 대상이 없으면 기존 메시지 — 제외 탓으로 오도하지 않는다.
+        self.project_a.exclude_paths = ['samples']
+        self.project_a.save()
+        run_id = self._upload({'README.md': '#\n'})
+
+        self.client.post(execute_url(run_id))
+
+        self.assertIn(
+            '분석 가능한 소스 파일이 없습니다',
+            AnalysisRun.objects.get(pk=run_id).error_message,
+        )
+        mock_run.assert_not_called()
+
+    @patch('analysis.services.subprocess.run')
+    def test_anchored_pattern_does_not_exclude_nested_same_named_directory(self, mock_run):
+        # `/`가 든 패턴은 루트 기준 — sub/catalog/samples는 남아 스캔된다 (Semgrep과 같은 규칙).
+        self.project_a.exclude_paths = ['catalog/samples']
+        self.project_a.save()
+        run_id = self._upload({'sub/catalog/samples/v.py': 'x\n'})
+        self._succeed(mock_run)
+
+        response = self.client.post(execute_url(run_id))
+
+        self.assertEqual(response.data['status'], AnalysisStatus.SUCCEEDED)
+        mock_run.assert_called_once()
+
+    @patch('analysis.services.subprocess.run')
+    def test_invalid_stored_exclude_paths_fail_the_run_before_semgrep(self, mock_run):
+        # 심층 방어 — API 검증을 거치지 않고(admin·shell) 저장된 값도 인자가 되기 전에 다시
+        # 검증한다. 잘못된 값이면 실행을 실패로 기록하고 Semgrep을 부르지 않는다.
+        Project.objects.filter(pk=self.project_a.pk).update(exclude_paths=['../etc'])
+        run_id = self._upload({'app.py': 'eval(input())\n'})
+
+        response = self.client.post(execute_url(run_id))
+
+        self.assertEqual(response.data['status'], AnalysisStatus.FAILED)
+        self.assertIn('제외 경로가 올바르지 않습니다', AnalysisRun.objects.get(pk=run_id).error_message)
+        mock_run.assert_not_called()
+
+    @skipUnless(SEMGREP_AVAILABLE, 'semgrep 바이너리가 없어 실제 제외 동작은 건너뛴다')
+    def test_real_semgrep_skips_excluded_files_even_inside_a_git_repo(self):
+        # 실제 Semgrep 실행: 제외된 디렉토리의 취약 코드는 결과에 나오지 않는다.
+        # 작업 영역을 git 저장소 안에 둔다 — 실서버(media/가 이 저장소 아래)와 같은 조건.
+        # --project-root 없이는 Semgrep이 위의 .git을 루트로 삼아 `/`가 든 패턴이 저장소
+        # 기준으로 앵커되고 제외가 통째로 무시됐다 (2026-09-06 run 51: 229건 그대로).
+        subprocess.run(['git', 'init', '-q', str(self.tmp_root)], check=True, capture_output=True)
+        self.project_a.exclude_paths = ['catalog/samples', 'tests.py']
+        self.project_a.save()
+        vulnerable = 'import subprocess\nsubprocess.call(input(), shell=True)\n'
+        run_id = self._upload({
+            'app.py': vulnerable,
+            'catalog/samples/v.py': vulnerable,
+            'pkg/tests.py': vulnerable,
+        })
+
+        response = self.client.post(execute_url(run_id))
+
+        self.assertEqual(response.data['status'], AnalysisStatus.SUCCEEDED)
+        paths = {
+            r['path'].replace('\\', '/') for r in AnalysisRun.objects.get(pk=run_id).raw_result['results']
+        }
+        self.assertTrue(paths, '취약 코드가 있는 app.py에서 결과가 나와야 한다')
+        self.assertTrue(all(p.endswith('/app.py') for p in paths), paths)
+        self.assertFalse(any('/samples/' in p or p.endswith('/tests.py') for p in paths), paths)
+
+    def test_semgrepignore_inside_zip_is_not_extracted(self):
+        # 업로드 안 .semgrepignore는 Semgrep이 루트에서 읽어 파일을 조용히 빼므로 추출하지
+        # 않는다 — 검사에서 빠지는 경로는 프로젝트의 분석 제외 경로 한 곳에서만 정한다.
+        run_id = self._upload({
+            'app.py': 'x = 1\n',
+            '.semgrepignore': 'app.py\n',
+            'sub/.semgrepignore': 'app.py\n',
+        })
+
+        root = source_dir(AnalysisRun.objects.get(pk=run_id))
+        self.assertTrue((root / 'app.py').exists())
+        self.assertFalse((root / '.semgrepignore').exists())
+        self.assertFalse((root / 'sub' / '.semgrepignore').exists())
 
 
 class AccessLogTests(AnalysisTestCase):

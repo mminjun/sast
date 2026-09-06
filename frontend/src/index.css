@@ -151,7 +151,8 @@ a:hover {
 
 /* 폼 요소 */
 input,
-select {
+select,
+textarea {
   padding: 0.45rem 0.6rem;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -162,7 +163,8 @@ select {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: 2px solid #bfdbfe;
   border-color: var(--primary);
 }
@@ -470,6 +472,20 @@ td.truncate-sm {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
+}
+
+/* 분석 제외 경로 편집 — 한 줄에 하나라 고정폭·세로 조절만 */
+.exclude-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 5rem;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.exclude-editor code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* 닫을 수 있는 힌트 — 경고가 아닌 안내 톤(파란 계열) */

@@ -16,6 +16,8 @@ from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
+from projects.exclude_paths import is_excluded, validate_exclude_paths
+
 from .models import AnalysisRun, AnalysisStatus
 from .signals import run_succeeded
 
@@ -61,6 +63,12 @@ def source_dir(run):
 MACOS_METADATA_DIR = '__MACOSX'
 MACOS_METADATA_FILES = ('.DS_Store',)
 MACOS_METADATA_PREFIX = '._'
+# 업로드 안의 `.semgrepignore`는 추출하지 않는다. Semgrep은 프로젝트 루트(= 소스 디렉토리,
+# run_semgrep의 --project-root)의 이 파일을 읽어 대상을 조용히 뺀다 — 무엇이 검사에서
+# 빠졌는지는 프로젝트의 분석 제외 경로 한 곳에서만 정해지고 화면에 보여야 한다
+# (2026-09-06 실측: 루트 지정 시 hidden/ 항목이 결과에서 사라짐). `.gitignore`는
+# --no-git-ignore로 이미 무시한다.
+SCAN_CONTROL_FILES = ('.semgrepignore',)
 # PostgreSQL text/jsonb는 NUL(U+0000)을 저장하지 못한다. 외부 도구 출력과 고객 소스에서
 # 온 문자열은 저장 전에 걷어낸다 (방어선 — 위 메타데이터 제외가 근본 해결).
 NUL = chr(0)
@@ -183,6 +191,8 @@ def extract_zip_safely(uploaded_file, run):
         for info in infolist:
             if info.is_dir() or is_macos_metadata(info.filename):
                 continue
+            if Path(info.filename).name in SCAN_CONTROL_FILES:
+                continue
             target = (dest_root / info.filename).resolve()
             # 260자 넘는 경로도 만들 수 있도록 확장 경로로 생성한다 (fs_path 참고).
             os.makedirs(fs_path(target.parent), exist_ok=True)
@@ -221,6 +231,24 @@ def start_run(run):
     return bool(updated)
 
 
+def _scan_target_presence(target, suffixes, exclude_paths):
+    """(제외 후 분석 대상 파일이 있는가, 제외로 빠진 대상 파일이 있는가).
+
+    제외 판정은 Semgrep `--exclude`와 같은 규칙(projects.exclude_paths.is_excluded)이다 —
+    여기서 "대상 있음"인데 Semgrep이 전부 빼면 0건 SUCCEEDED가 되고, 반대면 스캔할 수
+    있는 zip을 실패로 기록한다. 첫 대상 파일을 찾는 즉시 멈춘다.
+    """
+    has_excluded = False
+    for path in target.rglob('*'):
+        if not (path.is_file() and path.suffix.lower() in suffixes):
+            continue
+        if exclude_paths and is_excluded(path.relative_to(target).parts, exclude_paths):
+            has_excluded = True
+            continue
+        return True, has_excluded
+    return False, has_excluded
+
+
 def run_semgrep(run):
     """격리된 소스 디렉토리에 대해 Semgrep을 동기 실행한다 (SFR-008~009, SEC-009).
 
@@ -231,18 +259,38 @@ def run_semgrep(run):
     # 오류 없이 스캔에서 조용히 빠진다 (2026-09-04 실험으로 확인).
     target = Path(fs_path(source_dir(run)))
 
+    # 프로젝트별 분석 제외 경로 — CI 워크플로의 `--exclude`와 같은 개념을 서버에도 둔다
+    # (RFP 외 자체 개선). 값은 저장 전에 검증·정규화된 것만 있다 (projects/exclude_paths.py).
+    # 실행 시점의 프로젝트 설정을 읽는다 — 업로드 후 제외 경로를 고쳐도 실행에 반영된다.
+    # 저장 경로(API·admin·shell)와 무관하게 인자가 되기 직전에 다시 검증한다 — 검증 없이
+    # subprocess 인자가 되는 값이 없어야 한다 (심층 방어). 잘못되면 실행을 실패로 기록한다.
+    try:
+        exclude_paths = validate_exclude_paths(run.project.exclude_paths)
+    except ValueError as exc:
+        run.status = AnalysisStatus.FAILED
+        run.error_message = f'프로젝트의 분석 제외 경로가 올바르지 않습니다: {exc}'
+        run.finished_at = timezone.now()
+        run.save(update_fields=['status', 'error_message', 'finished_at'])
+        return
+
     # 분석 대상 파일이 하나도 없으면 Semgrep을 돌리지 않는다. 빈 zip·지원 언어 파일이
     # 없는 zip도 Semgrep은 exit 0을 반환해 SUCCEEDED·0건으로 보이는데, 대상 없는
     # 입력은 유효하지 않은 분석이므로 실패로 기록한다 (TST-008, SFR-015).
+    # 제외 경로를 적용한 뒤 세는다 — 제외로 전부 빠져도 Semgrep은 똑같이 exit 0·0건이라
+    # 같은 함정이고, 그 경우 원인이 zip이 아니라 제외 설정임을 메시지로 알린다.
     suffixes = settings.ANALYSIS_SCAN_TARGET_SUFFIXES
-    if not any(
-        p.is_file() and p.suffix.lower() in suffixes
-        for p in target.rglob('*')
-    ):
+    has_target, has_excluded = _scan_target_presence(target, suffixes, exclude_paths)
+    if not has_target:
         run.status = AnalysisStatus.FAILED
-        run.error_message = (
-            f'분석 가능한 소스 파일이 없습니다 (지원 확장자: {", ".join(suffixes)}).'
-        )
+        if has_excluded:
+            run.error_message = (
+                '제외 경로를 적용하면 분석할 소스 파일이 남지 않습니다. '
+                f'프로젝트의 분석 제외 경로를 확인하세요 ({", ".join(exclude_paths)}).'
+            )
+        else:
+            run.error_message = (
+                f'분석 가능한 소스 파일이 없습니다 (지원 확장자: {", ".join(suffixes)}).'
+            )
         run.finished_at = timezone.now()
         run.save(update_fields=['status', 'error_message', 'finished_at'])
         return
@@ -262,6 +310,18 @@ def run_semgrep(run):
                 # 디렉토리 전체가 스캔 대상에서 빠져 결과가 0건이 된다. 그런데도 종료
                 # 코드는 0이라 실행은 성공으로 보인다 (docs/decisions.md 발견 2).
                 '--no-git-ignore',
+                # 프로젝트 제외 경로. `--exclude=값` 한 인자로 넘긴다 — shell=False라 값이
+                # 셸을 거치지 않고, 값 자체는 저장 전에 검증됐다 (projects/exclude_paths.py).
+                # `/`가 든 값은 대상 루트 기준, 없는 값은 어느 깊이의 이름이든 매칭
+                # (Semgrep 1.175.0 실측 — docs/decisions.md 2026-09-05).
+                *[f'--exclude={pattern}' for pattern in exclude_paths],
+                # 프로젝트 루트를 소스 디렉토리로 고정한다. 지정하지 않으면 Semgrep이 대상에서
+                # 위로 `.git`을 찾아 루트로 삼는데, 작업 영역이 이 저장소 아래(media/)라 루트가
+                # 우리 저장소가 되어 `/`가 든 제외 패턴(catalog/samples)이 저장소 기준으로
+                # 앵커돼 고객 소스의 catalog/samples를 빼지 못했다 (2026-09-06 도그푸딩 run 51,
+                # 229건 그대로). 루트는 확장 경로를 받지 않으므로 일반 절대 경로로 넘긴다
+                # (대상은 확장 경로 그대로 — 둘의 조합은 실측으로 확인).
+                f'--project-root={os.path.abspath(source_dir(run))}',
                 str(target),
             ],
             capture_output=True,

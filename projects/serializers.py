@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
+from .exclude_paths import validate_exclude_paths
 from .models import Project, ProjectMember
 
 User = get_user_model()
@@ -26,13 +27,31 @@ class ProjectSerializer(serializers.ModelSerializer):
     """프로젝트 등록·조회·수정 (SFR-004)."""
 
     created_by = UserBriefSerializer(read_only=True)
+    # 분석 제외 경로 — 항목별 검증은 validate_exclude_paths에서 한 번에 한다. ListField의
+    # child 오류는 {"exclude_paths": {"0": [...]}} 꼴로 중첩돼 화면의 오류 표시
+    # (ApiError.detail)가 읽지 못하므로, 평평한 한 문장으로 돌려준다.
+    exclude_paths = serializers.ListField(
+        child=serializers.CharField(allow_blank=True, trim_whitespace=False),
+        required=False,
+        allow_empty=True,
+    )
 
     class Meta:
         model = Project
-        fields = ('id', 'name', 'description', 'created_by', 'created_at', 'updated_at')
+        fields = (
+            'id', 'name', 'description', 'exclude_paths',
+            'created_by', 'created_at', 'updated_at',
+        )
         # created_by를 read_only로 둔다 — 본문으로 보낸 값은 무시되고 서버가 request.user로
         # 채우므로 생성자를 위조할 수 없다 (mass assignment 방지, SEC-005).
         read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
+
+    def validate_exclude_paths(self, values):
+        # 여기서 통과한 값만 Semgrep 인자가 된다 — 검증 규칙은 projects/exclude_paths.py.
+        try:
+            return validate_exclude_paths(values)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
 
 
 class ProjectMemberSerializer(serializers.ModelSerializer):

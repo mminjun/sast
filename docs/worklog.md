@@ -421,3 +421,29 @@
   base 38·target 38·신규 0. 남은 191건은 catalog/samples(의도적 취약 샘플)·catalog/tests.py
   픽스처가 대부분 — 이건 "오탐"이 아니라 분석 대상 밖이라 CI처럼 업로드 시 제외하는 편이
   맞고, 다음 과제(업로드 제외 경로 설정)의 근거로 남긴다
+- 프로젝트별 분석 제외 경로(feature/exclude-paths): 도그푸딩 229건 중 catalog/samples 162건은
+  오탐이 아니라 분석 대상 밖 → CI의 `--exclude`와 같은 개념을 서버에 대칭으로. Project.
+  exclude_paths(JSON 배열, 0003) → 실행 시 `--exclude=값` 인자(빈 배열이면 인자 없음, 실행 시점
+  값 적용). Semgrep 1.175.0 규칙을 실측해 기록: `/` 포함은 루트 앵커, 없으면 어느 깊이든 이름
+  매칭, 글롭 가능. 빈 zip 검사(0개)는 제외 적용 후 세고 메시지로 원인을 구분. 검증은
+  `projects/exclude_paths.py`(허용 문자·`..`·절대 경로·역슬래시·선행 `-` 거부, 50개·200자,
+  정규화·중복 제거) — secure-review 지적으로 admin 폼용 모델 validator + 실행 직전 재검증 추가,
+  정규식 `$`→fullmatch. 화면: 프로젝트 상세에 "분석 제외 경로" 섹션(전원 표시, 관리자 편집,
+  도움말 한 줄). Chrome 확장 미연결로 브라우저 확인은 못 하고 개발 서버 API로 확인(응답 필드·
+  400). 테스트 26개 추가(실제 Semgrep 제외 실증 1개 포함), 전체 통과. vite build 확인
+- 제외 경로 도그푸딩 — 어제 남긴 과제를 실제로 닫음. 도그푸딩 프로젝트에 `catalog/samples`를
+  넣고 run 5와 같은 zip(142파일)을 재실행: 첫 재실행(run 6)은 **229건 그대로** — 서버 로그로 새
+  코드 실행은 확인됐고, 같은 subprocess 호출로 실측하니 원인은 Semgrep이 대상 위의 `.git`(우리
+  저장소)을 프로젝트 루트로 잡아 `/`가 든 패턴이 저장소 기준으로 앵커된 것. 9/5 실험·테스트는
+  임시 디렉토리(저장소 밖)라 못 잡았다. `--project-root=<소스 디렉토리>`(일반 경로, 대상은 확장
+  경로) 고정 후 run 7: **229 → 67건**(HIGH 160→57, MEDIUM 52→0, LOW 17→10), catalog/samples
+  162→0, 오탐 38건 승계 유지, OPEN 191→29(catalog/tests.py 11·frontend 9·analysis 4·projects 4·
+  config 1). diff는 제외된 162건을 '해결'로 집계한다 — 제외는 고친 게 아니므로 알려진 동작으로
+  기록. 부수 발견: 루트 고정 시 업로드 안 `.semgrepignore`가 읽혀 파일이 조용히 빠짐 → 추출에서
+  건너뛰도록 함(테스트 포함). 실제 Semgrep 테스트는 작업 영역을 `git init` 해 실서버 조건 재현.
+  runserver 정리 요청: 4개 PID가 전부 이 세션의 한 서버(StatReloader 재시작 체인)라 이전 세션
+  잔여 프로세스는 없었음. PR #8 게이트 통과
+- `.env` 사고 처리: 도그푸딩 zip에 `.env`가 들어가 run 49~52 작업 영역에 복사돼 있던 것을 삭제.
+  커밋 이력 없음 확인(`git log -- .env` 빈 결과). `scripts/make_selfscan_zip.py` 추가 — git 추적
+  파일만 + DENY 이름 재검사, 실행 결과 170개 파일·`.env.example`만 포함. decisions에 8/27
+  `.gitignore` 사고와 9/6 `--project-root` 사고를 "작업 영역이 저장소 내부" 계열로 묶어 기록

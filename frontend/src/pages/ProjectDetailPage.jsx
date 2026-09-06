@@ -32,6 +32,11 @@ export default function ProjectDetailPage() {
   const [addUserId, setAddUserId] = useState('');
   const [addingMember, setAddingMember] = useState(false);
   const [removingId, setRemovingId] = useState(null);
+  // 분석 제외 경로 — 화면은 한 줄에 하나로 편집하고, API는 배열로 주고받는다 (관리자만 수정).
+  const [excludeText, setExcludeText] = useState('');
+  const [savingExclude, setSavingExclude] = useState(false);
+  const [excludeError, setExcludeError] = useState('');
+  const [excludeSaved, setExcludeSaved] = useState(false);
 
   const loadRunChanges = () => {
     // 부가 표시라 실패해도 목록은 그대로 보여준다.
@@ -47,6 +52,7 @@ export default function ProjectDetailPage() {
       .then(([p, r]) => {
         setProject(p);
         setRuns(r);
+        setExcludeText((p.exclude_paths || []).join('\n'));
       })
       .catch((err) => {
         // 미할당·미존재 프로젝트는 서버가 동일한 404를 준다 (SEC-006) — 구분하지 않는다.
@@ -100,6 +106,32 @@ export default function ProjectDetailPage() {
       setMemberError(err instanceof ApiError ? err.detail : '해제에 실패했습니다.');
     } finally {
       setRemovingId(null);
+    }
+  };
+
+  const handleSaveExclude = async (event) => {
+    event.preventDefault();
+    setExcludeError('');
+    setExcludeSaved(false);
+    setSavingExclude(true);
+    // 줄 단위로 나눠 배열로 보낸다 — 항목별 검증(.. 금지, 절대 경로 금지 등)은 서버가 한다.
+    const excludePaths = excludeText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    try {
+      const updated = await api(`/api/projects/${id}/`, {
+        method: 'PATCH',
+        body: { exclude_paths: excludePaths },
+      });
+      setProject(updated);
+      // 서버가 정규화(앞뒤 / 제거·중복 제거)한 값으로 되돌려 편집창을 맞춘다.
+      setExcludeText((updated.exclude_paths || []).join('\n'));
+      setExcludeSaved(true);
+    } catch (err) {
+      setExcludeError(err instanceof ApiError ? err.detail : '저장에 실패했습니다.');
+    } finally {
+      setSavingExclude(false);
     }
   };
 
@@ -286,6 +318,43 @@ export default function ProjectDetailPage() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {/* 분석 제외 경로 — 오탐 판정(잘못 잡은 것)과 달리 "검사할 이유가 없는" 샘플·픽스처를
+          스캔 자체에서 뺀다. CI 워크플로의 --exclude와 같은 개념. 읽는 사람도 무엇이 빠졌는지
+          알아야 하므로 표시는 전원, 수정은 관리자만. */}
+      <h2>분석 제외 경로</h2>
+      {isAdmin ? (
+        <form className="card exclude-editor" onSubmit={handleSaveExclude}>
+          <textarea
+            value={excludeText}
+            onChange={(e) => {
+              setExcludeText(e.target.value);
+              setExcludeSaved(false);
+            }}
+            placeholder={'catalog/samples\ntests.py'}
+            rows={4}
+            spellCheck={false}
+          />
+          <div className="form-inline">
+            <button type="submit" className="btn btn-primary" disabled={savingExclude}>
+              {savingExclude ? '저장 중…' : '제외 경로 저장'}
+            </button>
+            {excludeSaved && <span className="muted small">저장됨 — 다음 실행부터 적용됩니다.</span>}
+          </div>
+          <span className="muted small">
+            한 줄에 하나. <code>/</code>가 있으면 zip 루트 기준 경로(예: catalog/samples),
+            없으면 어느 위치든 그 이름의 파일·폴더(예: tests.py). <code>*</code> 사용 가능.
+            의도적으로 취약한 샘플·테스트 픽스처처럼 검사할 이유가 없는 경로를 빼는 용도입니다.
+          </span>
+          {excludeError && <p className="form-error">{excludeError}</p>}
+        </form>
+      ) : (
+        <p className={project.exclude_paths?.length ? 'mono small' : 'muted'}>
+          {project.exclude_paths?.length
+            ? project.exclude_paths.join(', ')
+            : '제외 경로 없음 — zip 전체를 분석합니다.'}
+        </p>
       )}
 
       {isAdmin && (
