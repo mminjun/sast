@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -136,6 +137,15 @@ PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.Argon2PasswordHasher',
     'django.contrib.auth.hashers.ScryptPasswordHasher',
 ]
+
+# 테스트 실행 중에만 빠른 해셔로 바꾼다 (운영 설정은 위 그대로).
+# bcrypt는 해시 1회에 약 0.3초(2026-09-06 실측)인데 시험마다 setUp이 사용자 2~3명을 만들어
+# 313개 시험 중 약 5분이 해시에 쓰였다. Django 문서가 권하는 방식이고, "비밀번호를 bcrypt로
+# 저장한다"(SEC-001)를 검증하는 시험은 override_settings로 실제 해셔를 다시 고정한다
+# (accounts/tests.py PasswordHashingTests·UserCreateTests). 고속 해시를 비밀번호 저장에 쓰지
+# 않는다는 CLAUDE.md 규칙은 운영 저장에 관한 것이고, 테스트 DB는 매 실행 폐기된다.
+if sys.argv[1:2] == ['test']:
+    PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 
 
 # DRF (SFR-002, SEC-002)

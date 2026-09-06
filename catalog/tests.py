@@ -29,7 +29,7 @@ from django.utils import timezone
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings, tag
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -1207,6 +1207,9 @@ class SignalWiringTests(WorkspaceMixin, TestCase):
 # 정탐·오탐 (TST-005)
 # ---------------------------------------------------------------------------
 
+# 실제 Semgrep을 도는 무거운 시험(수십 초~분). 평소엔 `--exclude-tag=semgrep`으로 건너뛰고
+# 커밋 전 전체 실행에서만 돈다 — 사용법은 CLAUDE.md.
+@tag('semgrep')
 @unittest.skipUnless(SEMGREP_AVAILABLE, 'semgrep 바이너리가 없어 건너뜀')
 @override_settings(ANALYSIS_SEMGREP_CONFIG=str(settings.CATALOG_RULES_DIR))
 class DetectionSampleTests(WorkspaceMixin, TestCase):

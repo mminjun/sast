@@ -41,6 +41,21 @@ KISA 개발보안 가이드 기반 SAST(정적 애플리케이션 보안 테스�
   주석에 남긴다 (추적성).
 - 기능 구현 완료 시 docs/requirements-map.md의 해당 번호 상태를 갱신한다.
 - 하루 작업 종료 시 docs/worklog.md에 기록을 남긴다.
+## 테스트 실행
+
+- 평소(코드 고치며 반복, 약 1분):
+  `venv\Scripts\python manage.py test --exclude-tag=semgrep --noinput --parallel 4`
+  — 실제 Semgrep을 도는 무거운 시험(`@tag('semgrep')`: catalog 정탐·오탐 샘플, analysis 실제
+  제외 실증)을 건너뛴다.
+- 커밋 전·룰/샘플/실행 경로를 건드렸을 때(전체):
+  `venv\Scripts\python manage.py test --noinput --parallel 4`.
+  Semgrep 시험만 따로: `... test --tag=semgrep --noinput`.
+- `--noinput`은 항상 붙인다 — 테스트 DB가 남아 있으면 삭제 확인 프롬프트에서 멈춘다.
+  테스트는 동시에 두 개 돌리지 않는다(같은 테스트 DB).
+- 실제 Semgrep을 호출하는 시험을 새로 만들면 `@tag('semgrep')`을 붙인다.
+- 테스트 실행 중에는 비밀번호 해셔가 MD5로 바뀐다(config/settings.py, 속도 목적, 운영 불변).
+  저장 방식 자체를 검증하는 시험은 `override_settings`로 bcrypt를 고정한다.
+
 ## 완료 기준
 
 - 기능이 실제로 동작하고, 관련 테스트/시연으로 확인될 때 완료로 본다.

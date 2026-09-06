@@ -1,6 +1,7 @@
 """인증·역할 시험 (TST-001, TST-002)."""
 
 from django.contrib.auth import get_user_model
+from django.test import override_settings
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.urls import reverse
@@ -44,6 +45,9 @@ class AuthAPITestCase(APITestCase):
 class PasswordHashingTests(APITestCase):
     """SEC-001 — 비밀번호는 bcrypt로 저장된다."""
 
+    # 테스트 설정은 속도 때문에 빠른 해셔를 쓰므로(config/settings.py), 저장 방식 자체를
+    # 검증하는 이 시험만 실제 bcrypt 해셔를 고정한다 (SEC-001).
+    @override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.BCryptSHA256PasswordHasher'])
     def test_password_is_stored_with_bcrypt(self):
         user = User.objects.create_user(email='hash@example.com', password=PASSWORD)
         self.assertTrue(
@@ -434,6 +438,9 @@ class UserCreateApiTests(AuthAPITestCase):
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res.data['name'], '')
 
+    # 테스트 설정은 속도 때문에 빠른 해셔를 쓰므로(config/settings.py), 저장 방식 자체를
+    # 검증하는 이 시험만 실제 bcrypt 해셔를 고정한다 (SEC-001).
+    @override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.BCryptSHA256PasswordHasher'])
     def test_password_is_stored_with_bcrypt(self):
         self.client.post(self.url, {'email': 'bc@example.com', 'password': PASSWORD})
         user = User.objects.get(email='bc@example.com')
