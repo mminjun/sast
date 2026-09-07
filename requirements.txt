@@ -31,3 +31,11 @@ PyYAML==6.0.3
 # 쓰지 않은 근거는 docs/decisions.md 2026-09-06. 라이선스: BSD-3-Clause.
 # (typing_extensions / django-stubs-ext는 이 패키지가 끌어오는 전이 의존성)
 django-tasks-db==0.13.0
+
+# 컨테이너 실행 (docs/decisions.md 2026-09-07 Docker 한 줄 실행)
+# whitenoise — Django가 프론트 빌드(frontend/dist)와 admin 정적 파일을 직접 서빙한다. nginx 컨테이너를
+# 두지 않는 근거는 decisions 참조. 전이 의존성 없음. 라이선스: MIT.
+whitenoise==6.12.0
+# gunicorn — 컨테이너 안 WSGI 서버. runserver는 개발 전용이라 Docker 이미지에서는 쓰지 않는다. 호스트
+# 개발 경로(runserver)는 그대로다. 전이 의존성 없음. 라이선스: MIT.
+gunicorn==26.2.0

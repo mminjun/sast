@@ -50,6 +50,8 @@ KISA 개발보안 가이드 기반 SAST(정적 애플리케이션 보안 테스�
   (semgrep이 PATH에 있어야 하므로 venv\Scripts 경로 포함). 워커 없이는 QUEUED에 머문다.
 - 테스트는 immediate 백엔드로 돌아 워커·Redis가 필요 없다. 큐 등록 자체를 검증하는 시험은
   `override_settings(TASKS=...)`로 DummyBackend를 쓴다.
+- 제품 전체를 띄워 보려면 `docker compose up`(db·web·worker, localhost:8000). 개발(runserver+Vite)과 공존하며
+  `docker compose up -d db`는 예전과 같다. 컨테이너 구성은 Dockerfile·docker/entrypoint.py·docs/setup.md.
 
 ## 룰 작성
 

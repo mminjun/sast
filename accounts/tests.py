@@ -1,6 +1,12 @@
 """인증·역할 시험 (TST-001, TST-002)."""
 
+import os
+from io import StringIO
+from unittest import mock
+
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import override_settings
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
@@ -666,3 +672,61 @@ class UserDeactivateApiTests(AuthAPITestCase):
             {'email': self.target.email, 'password': PASSWORD},
         )
         self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class EnsureSuperuserCommandTests(APITestCase):
+    """컨테이너 진입 스크립트용 관리자 보장 커맨드 (accounts/management/commands/ensure_superuser.py)."""
+
+    ENV_VARS = ('DJANGO_SUPERUSER_EMAIL', 'DJANGO_SUPERUSER_PASSWORD')
+
+    def _call(self, env):
+        """주어진 값만 환경에 두고(나머지 두 변수는 제거) 커맨드를 돌린다 — 호스트 .env의 값이 섞이지 않게."""
+        out = StringIO()
+        with mock.patch.dict('os.environ', env, clear=False):
+            for name in self.ENV_VARS:
+                if name not in env:
+                    os.environ.pop(name, None)
+            call_command('ensure_superuser', stdout=out)
+        return out.getvalue()
+
+    def test_creates_admin_from_env(self):
+        out = self._call({'DJANGO_SUPERUSER_EMAIL': 'Ops@Example.com',
+                          'DJANGO_SUPERUSER_PASSWORD': 'correct-horse-battery-staple'})
+        user = User.objects.get(email__iexact='ops@example.com')
+        self.assertEqual(user.role, Role.ADMIN)
+        self.assertTrue(user.is_superuser and user.is_staff)
+        self.assertTrue(user.check_password('correct-horse-battery-staple'))
+        self.assertIn('만들었습니다', out)
+
+    def test_skips_when_admin_exists(self):
+        User.objects.create_superuser(email='ops@example.com', password='original-pw-not-changed')
+        out = self._call({'DJANGO_SUPERUSER_EMAIL': 'ops@example.com',
+                          'DJANGO_SUPERUSER_PASSWORD': 'another-strong-value-1'})
+        self.assertIn('이미 있어', out)
+        self.assertTrue(User.objects.get(email='ops@example.com').check_password('original-pw-not-changed'))
+        self.assertEqual(User.objects.count(), 1)
+
+    def test_rejects_weak_password(self):
+        with self.assertRaises(CommandError) as ctx:
+            self._call({'DJANGO_SUPERUSER_EMAIL': 'ops@example.com',
+                        'DJANGO_SUPERUSER_PASSWORD': 'password'})
+        self.assertIn('비밀번호 규칙', str(ctx.exception))
+        self.assertFalse(User.objects.exists())
+
+    def test_rejects_env_example_placeholder(self):
+        # .env.example의 값 그대로 — 길어서 Django 검증기는 통과하므로(컨테이너 실측) 따로 막는다.
+        placeholder = next(
+            line.split('=', 1)[1].strip()
+            for line in open('.env.example', encoding='utf-8')
+            if line.startswith('DJANGO_SUPERUSER_PASSWORD=')
+        )
+        with self.assertRaises(CommandError) as ctx:
+            self._call({'DJANGO_SUPERUSER_EMAIL': 'ops@example.com',
+                        'DJANGO_SUPERUSER_PASSWORD': placeholder})
+        self.assertIn('placeholder', str(ctx.exception))
+        self.assertFalse(User.objects.exists())
+
+    def test_no_env_is_a_noop_with_hint(self):
+        out = self._call({})
+        self.assertIn('만들지 않습니다', out)
+        self.assertFalse(User.objects.exists())

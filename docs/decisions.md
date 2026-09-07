@@ -2,7 +2,7 @@
 
 형식: 날짜 | 결정 | 근거 | 관련 요구사항
 
-## 목차 (절 21개, 결정 199건 — 시간순)
+## 목차 (절 22개, 결정 208건 — 시간순)
 
 절 제목을 누르면 본문으로 간다. 본문은 재편하지 않고 목차만 붙였다(2026-09-07).
 
@@ -29,6 +29,7 @@
 | [2026-09-06 (자체 taint 분석 1단계 — 함수 내, Semgrep과의 병합)](#2026-09-06-자체-taint-분석-1단계--함수-내-semgrep과의-병합) | 12 | 자체 스펙·접근 경로 환경·경로 비민감, LOOP_PASSES 3, Semgrep과 병합, semgrep_only 감지 장치, 헤더 식 호출 결함 |
 | [2026-09-06 (자체 taint 분석 2단계 — 같은 파일 안 함수 간 추적)](#2026-09-06-자체-taint-분석-2단계--같은-파일-안-함수-간-추적) | 11 | 가정이 틀려 목표 재정의, 요약 고정점·단조 병합, 이름 규약 vs 본문, role·paths_count, N=4/M=5 |
 | [2026-09-06 (자체 taint 분석 3단계 — 클래스 필드 경유, 마지막 단계)](#2026-09-06-자체-taint-분석-3단계--클래스-필드-경유-마지막-단계) | 8 | 흐름 비민감의 대가 실측(우려가 뒤집힘), 필드·요약 한 고정점, role field, N=5/M=1, 한계 표 넘은 것/남은 것 |
+| [2026-09-07 (Docker 한 줄 실행)](#2026-09-07-docker-한-줄-실행) | 9 | 개발 환경과 공존, whitenoise(nginx 미채택)·finders 모드, gunicorn, 시크릿 fail-fast 유지 + 관리자 비밀번호 검증, named volume·비루트, `--reap-all`, Python 진입 스크립트(CRLF), 이미지 크기 실측 |
 
 ## 2026-08-25
 
@@ -1466,3 +1467,71 @@ Semgrep 문서만 읽어서는 예측할 수 없고, 실제로 돌려 JSON을 �
   파일 간(import 해석), 경로 민감도·호출 순서, 전역·클로저, 사용자 정의 이스케이프 함수는 같은 파일이면 본문으로
   보지만 임포트면 이름 규약, 상속. 자체 엔진 3단계로 계획한 범위는 끝 — 다음은 필요가 생길 때(파일 간이 가장
   큰 후보) | SFR-009
+
+## 2026-09-07 (Docker 한 줄 실행)
+
+목표는 "클론 → `.env` 채우기 → `docker compose up`". 이전에는 터미널 3개·명령 10개(setup.md 8단계)라 클론한 사람이
+대부분 포기했다. 마지막 개발 작업.
+
+- **개발 환경(호스트 runserver + Vite)과 Docker를 공존시킨다 — Docker로 통일하지 않는다** | 개발 중엔 핫리로드가
+  필요하고 컨테이너 안 Vite dev 서버는 파일 감시·포트·볼륨이 늘어 오히려 복잡하다. 같은 `docker-compose.yml`에
+  `web`·`worker`를 더했을 뿐 `docker compose up -d db`는 예전과 같고, 컨테이너는 `POSTGRES_HOST=db`를 compose
+  `environment`로 덮어써 `.env`의 `127.0.0.1`과 충돌하지 않는다(compose는 environment > env_file, `load_dotenv`는
+  기존 env를 덮지 않음 — 둘 다 확인). 둘은 같은 DB를 공유하고 media·logs는 따로(컨테이너는 named volume). web
+  포트는 `127.0.0.1:${WEB_PORT:-8000}` — 동시에 띄울 땐 값만 바꾼다 | DAR-001
+- **프론트 서빙은 nginx 컨테이너 대신 whitenoise** | 정적 파일은 Vite 산출물 300KB(index.html + JS/CSS 2개)와 admin
+  뿐이고 트래픽은 "관리자 몇 명". nginx를 두면 컨테이너 +1, 설정 파일 +1, `/api` 프록시 규칙, 업로드 크기 제한
+  (`client_max_body_size`)을 Django 상한과 두 번 맞춰야 하는 부담이 생기는데 얻는 것은 정적 파일 성능뿐이라
+  값어치가 없다(큐에서 Celery를 기각한 것과 같은 기준). whitenoise는 순수 Python 1개, 미들웨어 1줄. 대규모
+  트래픽이 생기면 그때 앞에 리버스 프록시를 두면 되고 whitenoise는 그대로 둬도 무해하다 | SFR-010
+- **whitenoise는 finders 모드 + `WHITENOISE_ROOT=frontend/dist`, collectstatic 없음** | `WHITENOISE_USE_FINDERS=True`면
+  admin·DRF 정적 파일을 앱 디렉토리에서 바로 찾아 `STATIC_ROOT`·`collectstatic`·manifest가 전부 필요 없다 — 빌드·기동
+  단계가 0개이고, `ManifestStaticFilesStorage`를 썼을 때 테스트에서 "manifest 없음"으로 터지는 흔한 함정도 없다.
+  대가는 admin 정적 파일의 압축·해시 생략인데 admin은 제품 화면이 아니다. Vite 산출물은 파일명에 해시가 있어
+  `WHITENOISE_IMMUTABLE_FILE_TEST`로 장기 캐시만 걸었다. dist의 `/assets/…`는 `WHITENOISE_ROOT`가 URL 루트에서
+  그대로 서빙해 Vite 설정(`base`)을 건드리지 않는다. dist가 없으면 `WHITENOISE_ROOT=None`으로 두어 호스트 테스트에서
+  "No directory" 경고가 나지 않는다. SPA 라우팅(`/projects/3` 새로고침)은 `config/views.py spa_index`가 index.html을
+  돌려주고, 정규식으로 `api/`·`admin/`·`static/`·`assets/`를 제외해 API 404가 index로 바뀌지 않는다. 기존 시험은
+  `/api`만 치므로 영향 0, CORS는 same-origin이라 여전히 불필요(개발은 Vite 프록시 유지), 인증은 JWT라 CSRF 무관 |
+  SFR-010
+- **WSGI 서버는 gunicorn** | `runserver`는 개발 전용(단일 스레드·정적 서빙·자동 재시작)이라 컨테이너에 쓰지
+  않는다. gunicorn은 순수 Python, 전이 의존성 0, 설정은 인자 4개(`--workers 2 --timeout 300`). 타임아웃 300초는
+  200MB zip 업로드 여유. 컨테이너 안에서 `0.0.0.0`에 묶고 호스트 노출은 compose가 `127.0.0.1`로 제한한다 | SEC-010
+- **시크릿 fail-fast를 유지한다 — 기본값을 두지 않고, 대신 생성 명령 한 줄을 `.env.example`에 넣는다** | "복사만 하면
+  뜬다"를 위해 `DJANGO_SECRET_KEY`·`POSTGRES_PASSWORD`에 기본값을 넣으면 예측 가능한 키로 조용히 뜨는 저장소가
+  된다 — 보안 도구가 그러면 안 된다(8/26 결정 유지). 장벽은 명령 한 줄로 없앤다:
+  `python -c "import secrets; print(secrets.token_urlsafe(50))"` — 두 값 모두 같은 명령이고, Python이 없으면
+  `docker run --rm python:3.13-slim python -c ...`. 관리자 계정도 같은 원칙: 가입이 없어 관리자가 없으면 로그인
+  자체가 불가라 `DJANGO_SUPERUSER_EMAIL/PASSWORD`를 받되, `ensure_superuser` 커맨드가 Django 비밀번호 검증기를 돌려
+  흔한 값이면 기동을 멈춘다. `.env.example`의 placeholder(`change-me-to-a-strong-password`)는 길고 흔한 목록에도
+  없어 검증기를 **통과했다**(컨테이너 실측 — 계획 단계의 가정이 틀림). 그래서 `change-me`가 든 값은 명시적으로
+  거부하고 시험이 `.env.example`의 실제 값을 읽어 고정한다. Django 표준 `createsuperuser --noinput`을 쓰지 않은
+  이유: 이미 있으면 오류(멱등 아님)이고 비-대화 모드는 검증기를 건너뛴다. 채울 값은 4개, 명령은 3개 — 현실적
+  최소. 부수 발견: compose는 `.env` 값의 `$…`를 변수로 해석해 조용히 지운다(기존 `.env`의 `get_random_secret_key`
+  값에 `$r2e`가 있어 경고가 났다). 생성 명령을 `token_urlsafe`(`[A-Za-z0-9_-]`만)로 통일한 이유 하나 더 |
+  SEC-001, 8/26 결정
+- **media·logs는 named volume, 컨테이너는 비루트 `app`(uid 1000)** | bind mount는 Linux 호스트에서 컨테이너 uid와 호스트
+  소유자가 어긋나 권한 오류가 나기 쉽다. named volume은 첫 마운트 때 이미지 쪽 디렉토리 소유권을 물려받으므로
+  Dockerfile에서 `chown app`만 해 두면 끝. web과 worker가 **같은 media volume**을 봐야 한다(web이 zip 저장, worker가
+  해제·분석 — SEC-007 격리 디렉토리가 그 아래). `settings.py`의 `ACCESS_LOG_DIR.mkdir`도 app 소유라 통과. Semgrep은
+  `$HOME/.semgrep`에 쓰므로 홈이 있는 사용자로 만들었다 | SEC-007
+- **워커 컨테이너는 `analysis_worker --reap-all` — 재시작 시 나이와 무관하게 RUNNING 전부 정리** | 기존 `reap_stale_runs`는
+  `started_at`이 타임아웃+여유(기본 15분)보다 오래된 RUNNING만 정리한다(9/6). 컨테이너에서 이것만으로는 안 된다는
+  것을 소스로 확인했다: `docker compose down`이 실행 도중이면 db_worker가 SIGTERM에 "현재 작업 끝까지"를 택하고
+  compose가 10초 뒤 SIGKILL → run은 RUNNING, 큐 행도 RUNNING(`ready()`가 제외해 다시 집지 않음). 다음 기동 때 나이
+  1분이라 정리되지 않고 15분 뒤 **또** 재기동해야 풀린다 — 시연에서 치명적. 유일한 워커라면 시작 시점의 RUNNING은
+  전부 고아이므로 나이를 보지 않고 정리하는 옵션을 더하고 compose 명령에 기본으로 넣었다(수동 절차는 아무도
+  안 돌린다 — 9/6과 같은 원칙). 워커가 여럿이면 다른 워커의 정상 실행까지 실패로 만드므로 `--scale`할 땐 빼라고
+  문서화. AnalysisRun에 worker_id를 기록해 "내가 집은 것만" 정리하는 안이 더 정확하지만 마이그레이션 + 큐 행과의
+  연결이 필요해 마지막 작업 범위 밖 — 필요해지면 그 방향 | SFR-009, SEC-009
+- **진입 스크립트는 `.sh`가 아니라 Python(`docker/entrypoint.py`)** | 이 저장소는 Windows에서 `core.autocrlf=true`로
+  체크아웃되어 `.sh`가 CRLF인 채 이미지에 복사되고 `/bin/sh^M: not found`로 죽는다(`.gitattributes`로 막을 수 있지만
+  클론하는 쪽 설정까지 통제할 수 없다). Python은 줄 끝을 가리지 않고 `call_command`로 migrate·seed·관리자를 직접
+  불러 서브프로세스도 없다. 준비 단계는 web만 하고 worker는 `depends_on: web: service_healthy`로 뒤에 뜬다 — 둘이
+  동시에 migrate를 돌리는 경쟁을 막는다. web healthcheck는 이미지에 curl이 없어 `urllib`로 `/`를 친다 | -
+- **이미지 크기 실측: 758MB — 줄일 여지 작음** | `python:3.13-slim` 기반. 호스트 site-packages 426MB 중 semgrep이
+  252MB(semgrep-core 바이너리)라 이미지의 대부분이 Semgrep이다. alpine은 semgrep wheel이 glibc(manylinux)라 아예 안
+  돌고, 의존성이 전부 wheel이라 gcc 등 빌드 도구는 원래 안 들어간다. node 스테이지는 산출물만 넘기고 버린다.
+  `.dockerignore`로 venv·node_modules·media·logs·.git·docs·dogfood zip·`.env`를 뺀다(특히 `.env` — 9/5 사고의 교훈).
+  테스트를 컨테이너에서 돌리는 것은 `docker compose run --rm web python manage.py test …`로 가능하게만 두고(tests.py·
+  samples가 이미지에 있고 POSTGRES_USER가 PG 슈퍼유저라 테스트 DB 생성 가능) CI는 호스트 그대로 | SEC-010

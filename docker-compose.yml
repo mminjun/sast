@@ -1,9 +1,13 @@
-# DAR-001 데이터 저장소 — 로컬 개발용 PostgreSQL
-# 시크릿(비밀번호)은 이 파일에 쓰지 않고 .env에서만 읽는다 (CLAUDE.md: 시크릿 커밋 금지)
+# Docker 한 줄 실행 (docs/decisions.md 2026-09-07, docs/setup.md "Docker로 띄우기")
+#   docker compose up            → db + web + worker. http://localhost:8000
+#   docker compose up -d db      → 개발 환경(호스트 runserver + Vite)은 DB만 쓴다 — 예전과 같다
+# 시크릿(비밀번호·키)은 이 파일에 쓰지 않고 .env에서만 읽는다 (CLAUDE.md: 시크릿 커밋 금지).
+# 기본값도 두지 않는다 — 없으면 ${VAR:?}로 즉시 실패(fail-fast). 생성 명령은 .env.example에 있다.
 name: sast
 
 services:
   db:
+    # DAR-001 데이터 저장소
     image: postgres:16
     container_name: sast-db
     restart: unless-stopped
@@ -24,5 +28,59 @@ services:
       retries: 5
       start_period: 10s
 
+  web:
+    # Django + 프론트(whitenoise) + gunicorn. 기동 시 migrate → seed_catalog → ensure_superuser (docker/entrypoint.py)
+    build: .
+    image: sast-app
+    container_name: sast-web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # .env의 POSTGRES_HOST(호스트 개발용 127.0.0.1)를 덮어쓴다 — 컨테이너 안에서는 서비스 이름으로 붙는다.
+      # compose는 environment가 env_file보다 우선하고, settings.py의 load_dotenv도 기존 env를 덮지 않는다.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+    ports:
+      # 호스트 runserver(8000)와 같이 띄우려면 .env에 WEB_PORT=8001 등으로 바꾼다
+      - "127.0.0.1:${WEB_PORT:-8000}:8000"
+    volumes:
+      # 업로드 zip·실행별 격리 디렉토리(SEC-007). worker와 같은 volume을 봐야 한다 — web이 저장, worker가 해제·분석
+      - sast-media:/app/media
+      # 접근 로그(logs/access.log)
+      - sast-logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # / 는 SPA index(200). 이미지에 curl이 없어 표준 라이브러리로 확인한다. healthy = migrate·seed까지 끝났다는 뜻
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    # 분석 워커 — 같은 이미지, 명령만 다르다. 큐는 PostgreSQL 테이블(django-tasks-db)이라 다른 서비스가 없다.
+    # --reap-all: 컨테이너 재시작 시 나이와 무관하게 RUNNING 실행 전부를 FAILED로 정리한다(유일한 워커일 때만 안전).
+    # 워커를 늘리려면(--scale worker=2) 이 옵션을 빼고 --worker-id를 서로 다르게 준다.
+    image: sast-app
+    container_name: sast-worker
+    restart: unless-stopped
+    # --no-reload: 컨테이너 안에는 바뀔 파일이 없다 — .env의 DJANGO_DEBUG=True가 켜는 파일 감시(StatReloader)를 끈다
+    command: ["python", "manage.py", "analysis_worker", "--reap-all", "--no-reload"]
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+    volumes:
+      - sast-media:/app/media
+      - sast-logs:/app/logs
+    depends_on:
+      # web이 healthy = migrate·seed가 끝남. 둘이 동시에 migrate를 돌리지 않게 한다
+      web:
+        condition: service_healthy
+
 volumes:
   sast-db-data:
+  sast-media:
+  sast-logs:

@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+import re
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -75,6 +76,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # 정적 파일 서빙 (Docker 한 줄 실행 — docs/decisions.md 2026-09-07). SecurityMiddleware 바로 뒤가
+    # whitenoise 권장 위치. 개발(runserver + Vite dev 서버)에서는 프론트를 Vite가 서빙하므로 사실상 놀고,
+    # 컨테이너에서는 frontend/dist(WHITENOISE_ROOT)와 admin 정적 파일을 Django 하나가 서빙한다.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -218,6 +223,30 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# 프론트 빌드 산출물과 정적 파일 서빙 (Docker 한 줄 실행 — docs/decisions.md 2026-09-07)
+# 컨테이너에서는 nginx 없이 Django(whitenoise)가 프론트를 서빙한다. 개발은 Vite dev 서버가 프론트를
+# 띄우고 /api만 프록시하므로 아래 설정은 dist가 있을 때만 의미가 있다.
+#   - FRONTEND_DIST: `npm run build` 산출물. Dockerfile의 node 스테이지가 만들어 이미지에 복사한다.
+#   - WHITENOISE_ROOT: dist의 /assets/… 를 URL 루트에서 그대로 서빙(Vite 설정·base 무수정). dist가 없으면
+#     None — whitenoise가 "No directory" 경고를 내지 않게 한다(호스트 테스트·클론 직후).
+#   - WHITENOISE_USE_FINDERS: admin·DRF 정적 파일을 앱 디렉토리에서 바로 찾는다. collectstatic·STATIC_ROOT·
+#     manifest가 필요 없어 빌드/기동 단계가 0개이고, 테스트에서 "manifest 없음" 오류가 날 여지도 없다.
+#     (압축·해시는 포기 — admin은 제품 화면이 아니고 Vite 산출물은 이미 파일명에 해시가 있다.)
+#   - index.html은 여기서 서빙하지 않는다. SPA 라우팅(/projects/3 새로고침)을 위해 config/urls.py의
+#     catch-all 뷰(config/views.py spa_index)가 돌려준다.
+FRONTEND_DIST = BASE_DIR / 'frontend' / 'dist'
+WHITENOISE_ROOT = FRONTEND_DIST if FRONTEND_DIST.is_dir() else None
+WHITENOISE_USE_FINDERS = True
+# Vite는 내용 해시를 파일명에 넣는다(index-B4-hXID0.js). 이런 파일만 장기 캐시(immutable) 대상으로 본다.
+_VITE_HASHED_ASSET = re.compile(r'^/assets/.+-[A-Za-z0-9_-]{8}\.[a-z0-9]+$')
+
+
+def _is_immutable_asset(path, url):
+    return bool(_VITE_HASHED_ASSET.match(url))
+
+
+WHITENOISE_IMMUTABLE_FILE_TEST = _is_immutable_asset
 
 
 # 분석 작업 영역 (SEC-007)

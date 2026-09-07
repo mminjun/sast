@@ -12,9 +12,15 @@ django-tasks-db의 `db_worker`를 그대로 상속한다 — 옵션(--interval, 
 동시 실행 수 = 워커 프로세스 수. 한 프로세스는 한 번에 한 작업만 처리하고, 두 개 이상
 띄우려면 --worker-id를 서로 다르게 준다 (README "분석 워커").
 
+--reap-all: 시작 시 나이와 무관하게 RUNNING 전부를 정리한다. 이 프로세스가 유일한 워커일 때만 —
+컨테이너(docker-compose.yml worker)가 기본으로 쓴다. 컨테이너가 실행 도중 내려가면 SIGKILL로 run이
+RUNNING에 남는데, 나이 임계만 쓰면 다음 기동에서 정리되지 않는다 (services.reap_stale_runs 참고).
+워커를 여러 개 띄우면(--scale, --worker-id 여러 개) 이 옵션을 빼야 한다.
+
 사용:
     python manage.py analysis_worker              # venv 활성화 상태 — semgrep이 PATH에 있어야 한다
     python manage.py analysis_worker --batch      # 밀린 작업만 처리하고 종료
+    python manage.py analysis_worker --reap-all   # 유일한 워커일 때(컨테이너) — RUNNING 전부 정리 후 시작
 """
 
 from django_tasks_db.management.commands.db_worker import Command as DbWorkerCommand
@@ -28,8 +34,16 @@ class Command(DbWorkerCommand):
         '큐(django_tasks_db)의 작업을 순서대로 처리한다.'
     )
 
+    def add_arguments(self, parser):
+        super().add_arguments(parser)
+        parser.add_argument(
+            '--reap-all',
+            action='store_true',
+            help='시작 시 나이와 무관하게 RUNNING 실행 전부를 FAILED로 정리한다 (이 프로세스가 유일한 워커일 때만).',
+        )
+
     def handle(self, *args, **options):
-        reaped = reap_stale_runs()
+        reaped = reap_stale_runs(all_running=options.pop('reap_all', False))
         if reaped:
             self.stdout.write(
                 self.style.WARNING(

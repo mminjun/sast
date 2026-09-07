@@ -1077,6 +1077,19 @@ class StaleRunReapTests(AnalysisTestCase):
         reap_stale_runs()
         self.assertEqual(reap_stale_runs(), 0)
 
+    def test_all_running_reaps_regardless_of_age_but_keeps_queued(self):
+        # 컨테이너 재시작(analysis_worker --reap-all): 유일한 워커이므로 젊은 RUNNING도 고아다.
+        recent = self._run(AnalysisStatus.RUNNING, started_ago=timedelta(seconds=10))
+        waiting = self._run(AnalysisStatus.QUEUED, queued_ago=timedelta(seconds=10))
+
+        self.assertEqual(reap_stale_runs(all_running=True), 1)
+
+        recent.refresh_from_db()
+        waiting.refresh_from_db()
+        self.assertEqual(recent.status, AnalysisStatus.FAILED)
+        self.assertEqual(recent.error_message, STALE_RUN_MESSAGE)
+        self.assertEqual(waiting.status, AnalysisStatus.QUEUED)
+
 
 @override_settings(TASKS=DATABASE_TASKS)
 class WorkerCommandTests(APITransactionTestCase):
@@ -1128,6 +1141,22 @@ class WorkerCommandTests(APITransactionTestCase):
         self.assertEqual(stale.status, AnalysisStatus.FAILED)
         self.assertEqual(stale.error_message, STALE_RUN_MESSAGE)
         mock_run.assert_called_once()
+
+    def test_reap_all_flag_reaps_young_running_before_processing(self):
+        # 컨테이너 worker 명령(docker-compose.yml)의 기본 — 시작 시 RUNNING 전부 정리
+        young = AnalysisRun.objects.create(
+            project=self.project, created_by=self.admin, original_filename='young.zip',
+            status=AnalysisStatus.RUNNING, started_at=timezone.now() - timedelta(seconds=5),
+        )
+
+        call_command(
+            'analysis_worker', '--reap-all', '--batch', '--no-startup-delay', '--no-reload',
+            '--interval', '0.1',
+        )
+
+        young.refresh_from_db()
+        self.assertEqual(young.status, AnalysisStatus.FAILED)
+        self.assertEqual(young.error_message, STALE_RUN_MESSAGE)
 
 
 # ---------------------------------------------------------------------------
