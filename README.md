@@ -106,7 +106,7 @@ Semgrep 1.175.0 OSS taint 모드를 직접 실측한 뒤(`docs/decisions.md` 202
 | KISA 진단 기준 | 49 등록, **39 실탐지** |
 | 룰 | **100** — Python 22 (taint 7 포함) · C 13 · Java 35 · JS/TS 30 |
 | 지원 확장자 | `.py` `.c` `.h` `.java` `.js` `.jsx` `.ts` `.tsx` |
-| 테스트 | **439** (accounts 61 · projects 51 · analysis 123 · catalog 189 · CI 게이트 13 · config 3), 실제 Semgrep을 도는 시험 22 |
+| 테스트 | **440** (accounts 61 · projects 51 · analysis 123 · catalog 189 · CI 게이트 13 · config 3), 실제 Semgrep을 도는 시험 22 |
 | 화면 | 7 — 로그인 · 프로젝트 목록 · 프로젝트 상세(대시보드) · 실행 상세 · 분석 비교 · 진단 기준 · 사용자 관리 |
 | API | 19 엔드포인트, Django 앱 4개 (accounts · projects · analysis · catalog) |
 | 자체 taint 엔진 | 1,120줄 (`analysis/taint`) |

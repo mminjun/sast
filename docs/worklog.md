@@ -574,7 +574,7 @@
   whitenoise(finders 모드 + `WHITENOISE_ROOT=dist`, collectstatic 없음), `config/views.py spa_index` catch-all,
   `accounts ensure_superuser`(검증기 + placeholder 명시 거부 — placeholder가 검증기를 통과하는 걸 컨테이너에서
   발견해 추가), `reap_stale_runs(all_running=)` + `analysis_worker --reap-all`. 새 의존성 whitenoise 6.12.0·gunicorn
-  26.2.0(승인). 시험 9개 추가(config 3·accounts 5·analysis 2 — 총 439, semgrep 제외 417 통과 67초). 실측: 이미지
+  26.2.0(승인). 시험 9개 추가(config 3·accounts 5·analysis 2 — 총 440, semgrep 제외 418 통과). 실측: 이미지
   758MB(semgrep-core가 대부분), `docker compose up` → migrate·시드 49·관리자 생성·healthy·worker 기동, 컨테이너에서
   샘플 zip 분석 SUCCEEDED 190건, `/projects/1` 새로고침 index 200, `/api/nope/` 404 유지, 해시 자산 immutable 캐시.
   부수 발견: compose가 `.env` 값의 `$`를 변수로 해석 — 생성 명령을 token_urlsafe로 통일. README 실행 방법을 Docker
