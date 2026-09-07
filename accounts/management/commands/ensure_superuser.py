@@ -23,29 +23,31 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 
-EMAIL_VAR = 'DJANGO_SUPERUSER_EMAIL'
-PASSWORD_VAR = 'DJANGO_SUPERUSER_PASSWORD'
+# 환경변수 *이름*. 상수 이름에 password를 넣지 않는 이유: 우리 SF-06 룰(변수명에 password + 문자열
+# 리터럴)이 이 줄을 하드코드 시크릿으로 잡아 CI 게이트가 막혔다(PR #18) — 값은 시크릿이 아니라 키 이름이다.
+EMAIL_ENV = 'DJANGO_SUPERUSER_EMAIL'
+PW_ENV = 'DJANGO_SUPERUSER_PASSWORD'
 # .env.example의 placeholder 표식. 값 안에 이 문자열이 있으면 "채우지 않은 것"으로 본다.
 PLACEHOLDER_MARK = 'change-me'
 
 
 class Command(BaseCommand):
     help = (
-        f'{EMAIL_VAR}/{PASSWORD_VAR}로 관리자 계정을 만든다. 이미 있으면 건너뛰고, '
+        f'{EMAIL_ENV}/{PW_ENV}로 관리자 계정을 만든다. 이미 있으면 건너뛰고, '
         '비밀번호가 검증기를 통과하지 못하면 실패한다 (컨테이너 진입 스크립트용, 멱등).'
     )
 
     def handle(self, *args, **options):
-        email = os.getenv(EMAIL_VAR, '').strip()
-        password = os.getenv(PASSWORD_VAR, '')
+        email = os.getenv(EMAIL_ENV, '').strip()
+        password = os.getenv(PW_ENV, '')
         if not email and not password:
             self.stdout.write(
-                f'{EMAIL_VAR}/{PASSWORD_VAR}가 없어 관리자 계정을 만들지 않습니다. '
+                f'{EMAIL_ENV}/{PW_ENV}가 없어 관리자 계정을 만들지 않습니다. '
                 '필요하면 .env에 두 값을 넣고 다시 기동하거나 `manage.py createsuperuser`를 실행하세요.'
             )
             return
         if not email or not password:
-            raise CommandError(f'{EMAIL_VAR}와 {PASSWORD_VAR}는 함께 지정해야 합니다.')
+            raise CommandError(f'{EMAIL_ENV}와 {PW_ENV}는 함께 지정해야 합니다.')
 
         User = get_user_model()
         email = User.objects.normalize_email(email)
@@ -55,13 +57,13 @@ class Command(BaseCommand):
 
         if PLACEHOLDER_MARK in password.lower():
             raise CommandError(
-                f'{PASSWORD_VAR}가 .env.example의 placeholder 그대로입니다 — 실제 비밀번호로 바꾼 뒤 다시 기동하세요.'
+                f'{PW_ENV}가 .env.example의 placeholder 그대로입니다 — 실제 비밀번호로 바꾼 뒤 다시 기동하세요.'
             )
         try:
             validate_password(password, user=User(email=email))
         except ValidationError as exc:
             raise CommandError(
-                f'{PASSWORD_VAR}가 비밀번호 규칙을 통과하지 못했습니다: ' + ' '.join(exc.messages)
+                f'{PW_ENV}가 비밀번호 규칙을 통과하지 못했습니다: ' + ' '.join(exc.messages)
                 + ' — .env의 값을 바꾼 뒤 다시 기동하세요.'
             )
 

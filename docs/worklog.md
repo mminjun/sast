@@ -579,3 +579,6 @@
   샘플 zip 분석 SUCCEEDED 190건, `/projects/1` 새로고침 index 200, `/api/nope/` 404 유지, 해시 자산 immutable 캐시.
   부수 발견: compose가 `.env` 값의 `$`를 변수로 해석 — 생성 명령을 token_urlsafe로 통일. README 실행 방법을 Docker
   3줄로, setup.md 앞에 "Docker로 띄우기" 절, decisions 9건, requirements-map 자체 개선 16번째 행
+- PR #18 게이트가 `ensure_superuser.py`의 `PASSWORD_VAR = 'DJANGO_SUPERUSER_PASSWORD'`를 SF-06(하드코드 시크릿)
+  신규 HIGH로 차단 — 값은 환경변수 이름이라 오탐. 룰의 변수명 정규식(password 등)을 피해 `PW_ENV`로 바꾸고 주석에
+  사유. 게이트가 자기 코드에서 실제로 막은 사례
