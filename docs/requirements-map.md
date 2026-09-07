@@ -106,7 +106,7 @@
 - RFP 외 자체 개선 16항목(위 표): 접근 로그·핑거프린트·diff·비교 화면·대시보드·CI 게이트·오탐 관리·제외 경로·
   테스트 태그·백그라운드 큐·Semgrep taint 룰·자체 taint 엔진 3단계·Docker 한 줄 실행 등
 - 룰: 100개(Python 22·C 13·Java 35·JS/TS 30), 49개 기준 중 39개 실탐지
-- 테스트: **439개 전부 통과** (accounts 61 · projects 51 · analysis 123 · catalog 189 · scripts 13 · config 3 — 9/7 기준,
+- 테스트: **440개 전부 통과** (accounts 61 · projects 51 · analysis 123 · catalog 189 · scripts 13 · config 3 — 9/7 기준,
   실제 Semgrep을 도는 시험 22개는 `@tag('semgrep')`)
 - 프론트엔드: 7화면 완결 — 로그인 / 프로젝트 목록 / 프로젝트 상세(대시보드 포함) /
   실행 결과 상세(코드 조각·오염 경로·판정) / 실행 비교 / 카탈로그 / 사용자 관리. 관리자·일반 계정 브라우저 E2E로
