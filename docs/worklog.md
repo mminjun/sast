@@ -567,3 +567,15 @@
   #1→#2 신규3/해결5/유지9, 카탈로그, PR #14 게이트 통과 코멘트; 계정 이메일은 가림). worklog 날짜 헤더 복원,
   requirements-map 현황 갱신·자체 개선 표에 큐·taint 룰·자체 엔진·테스트 태그 추가, self-scan 머리에 시점 안내
   한 줄, decisions 앞에 절 목차. Docker 한 줄 실행은 다음 PR
+- Docker 한 줄 실행(feature/docker, 마지막 개발 작업): 설계 7항목을 Plan Mode로 승인받고(공존/whitenoise 영향/워커
+  재시작/volume 권한/이미지 크기/컨테이너 테스트/단계 수) 구현. Dockerfile(node:24 빌드 스테이지 + python:3.13-slim,
+  비루트 app), `docker/entrypoint.py`(DB 대기→migrate→seed_catalog→ensure_superuser→gunicorn; Python인 이유는 CRLF),
+  compose에 web·worker(같은 이미지, named volume media·logs, worker는 web healthy 뒤), `.dockerignore`. Django 쪽은
+  whitenoise(finders 모드 + `WHITENOISE_ROOT=dist`, collectstatic 없음), `config/views.py spa_index` catch-all,
+  `accounts ensure_superuser`(검증기 + placeholder 명시 거부 — placeholder가 검증기를 통과하는 걸 컨테이너에서
+  발견해 추가), `reap_stale_runs(all_running=)` + `analysis_worker --reap-all`. 새 의존성 whitenoise 6.12.0·gunicorn
+  26.2.0(승인). 시험 9개 추가(config 3·accounts 5·analysis 2 — 총 439, semgrep 제외 417 통과 67초). 실측: 이미지
+  758MB(semgrep-core가 대부분), `docker compose up` → migrate·시드 49·관리자 생성·healthy·worker 기동, 컨테이너에서
+  샘플 zip 분석 SUCCEEDED 190건, `/projects/1` 새로고침 index 200, `/api/nope/` 404 유지, 해시 자산 immutable 캐시.
+  부수 발견: compose가 `.env` 값의 `$`를 변수로 해석 — 생성 명령을 token_urlsafe로 통일. README 실행 방법을 Docker
+  3줄로, setup.md 앞에 "Docker로 띄우기" 절, decisions 9건, requirements-map 자체 개선 16번째 행

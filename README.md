@@ -7,7 +7,7 @@
 Semgrep 무료 엔진이 못 하는 **함수 간·클래스 필드 경유 흐름 추적**은 1,120줄짜리 자체 taint 엔진이 맡음.
 Django + DRF / React / PostgreSQL.
 
-실행 방법은 [docs/setup.md](docs/setup.md)에 있음.
+클론 → `.env` 채우기 → `docker compose up` 한 줄로 뜸. 자세한 절차와 개발 환경은 [docs/setup.md](docs/setup.md).
 
 ![실행 상세 — 오염 경로: 소스(request.GET) → 대입(load 메서드의 self.host) → 진입(run) → 싱크(os.system)](docs/images/run-detail-taint-trace.png)
 
@@ -73,7 +73,7 @@ Semgrep 1.175.0 OSS taint 모드를 직접 실측한 뒤(`docs/decisions.md` 202
 
 ## 설계에서 판단한 것 5가지
 
-기각한 대안과 실측 숫자까지 `docs/decisions.md`에 199건을 남김. 그중 이 제품의 모양을 정한 다섯 가지:
+기각한 대안과 실측 숫자까지 `docs/decisions.md`에 208건을 남김. 그중 이 제품의 모양을 정한 다섯 가지:
 
 1. **심각도는 "추가 조건 없이 침해가 완성되는가"로 3단계.** KISA는 유형만 분류하고 등급을 주지 않는다. 높음 =
    원격 코드 실행·인증 우회·자격증명 직접 노출, 보통 = 사용자 상호작용·타이밍 같은 조건이 더 필요하거나 영향이
@@ -106,11 +106,11 @@ Semgrep 1.175.0 OSS taint 모드를 직접 실측한 뒤(`docs/decisions.md` 202
 | KISA 진단 기준 | 49 등록, **39 실탐지** |
 | 룰 | **100** — Python 22 (taint 7 포함) · C 13 · Java 35 · JS/TS 30 |
 | 지원 확장자 | `.py` `.c` `.h` `.java` `.js` `.jsx` `.ts` `.tsx` |
-| 테스트 | **430** (accounts 56 · projects 51 · analysis 121 · catalog 189 · CI 게이트 13), 실제 Semgrep을 도는 시험 22 |
+| 테스트 | **439** (accounts 61 · projects 51 · analysis 123 · catalog 189 · CI 게이트 13 · config 3), 실제 Semgrep을 도는 시험 22 |
 | 화면 | 7 — 로그인 · 프로젝트 목록 · 프로젝트 상세(대시보드) · 실행 상세 · 분석 비교 · 진단 기준 · 사용자 관리 |
 | API | 19 엔드포인트, Django 앱 4개 (accounts · projects · analysis · catalog) |
 | 자체 taint 엔진 | 1,120줄 (`analysis/taint`) |
-| 기록 | 결정 199건 · 요구사항 50/50 |
+| 기록 | 결정 208건 · 요구사항 50/50 |
 
 ## 작업 방식
 
@@ -131,11 +131,21 @@ Semgrep 1.175.0 OSS taint 모드를 직접 실측한 뒤(`docs/decisions.md` 202
 
 ## 실행 방법
 
-로컬 실행(터미널 3개), 테스트, CI 게이트 로컬 재현은 [docs/setup.md](docs/setup.md)에 있음.
+Docker만 있으면 됨. `.env`에서 채울 값은 4개(DB 비밀번호·시크릿 키·관리자 이메일·비밀번호)이고 생성 명령은
+파일 안에 있음.
+
+```bash
+git clone https://github.com/mminjun/sast.git && cd sast
+cp .env.example .env            # 4개 값 채우기 (주석의 한 줄 명령으로 생성)
+docker compose up               # db + web + worker → http://localhost:8000
+```
+
+첫 기동에서 마이그레이션·진단 기준 49개 시드·관리자 계정 생성까지 자동으로 끝남. 개발 환경(핫리로드,
+터미널 3개), 컨테이너 안 테스트, CI 게이트 로컬 재현은 [docs/setup.md](docs/setup.md)에 있음.
 
 ## 더 읽을 것
 
-- `docs/decisions.md` — 설계 결정 199건 (앞의 목차로 절을 찾음)
+- `docs/decisions.md` — 설계 결정 208건 (앞의 목차로 절을 찾음)
 - `docs/requirements-map.md` — RFP 요구사항 50개 + 자체 개선 항목의 구현 상태
 - `docs/worklog.md` — 일자별 작업 기록
 - `docs/plan.md` — 킥오프 계획(요구사항 해석·비목표·일정)

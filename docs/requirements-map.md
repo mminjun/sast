@@ -93,6 +93,7 @@
 | 분석 실행 백그라운드 큐 (9/6) | Django 6.1 `django.tasks` + `django-tasks-db`(PostgreSQL 테이블, Redis 없음). QUEUED 상태·조건부 UPDATE로 중복 실행 방지, 워커 시작 시 고착 RUNNING 자동 정리, 화면 3초 폴링·5분 힌트. Celery·RQ·huey·django-q2 비교 후 채택 | analysis/tasks.py, analysis/management/commands/analysis_worker.py, reap_stale_runs.py |
 | Semgrep taint 룰 (9/6) | Python 인젝션 7항목(IV-01·02·03·04·05·07·12)을 패턴 룰에서 taint 모드로 교체 — 상수만 흐르면 안 잡고 선언한 검증(정규식·allowlist·타입 변환·이스케이프)은 깨끗. 텍스트 출력에서 오염 경로를 읽어 결과에 붙임, 엔진 표시 | catalog/rules/taint_python.yaml, analysis/semgrep_trace.py, frontend `RunDetailPage` |
 | 자체 taint 엔진 (9/6, 3단계) | Django 없는 `ast` 기반 엔진. 1단계 함수 내(Semgrep과 동등성 both 15/semgrep_only 0), 2단계 같은 파일 함수 간(함수 요약 고정점, N=4/M=5), 3단계 클래스 필드 경유(흐름 비민감, N=5/M=1). Semgrep 결과와 (항목·파일·줄) 병합, `custom_taint_stats.semgrep_only`가 회귀 감지 장치, `.env`로 on/off·시간 예산 | analysis/taint/ (spec·state·python_analyzer·engine·report), catalog/services.py `_merge_engines`, 샘플 `taint_inter_*`·`taint_class_*` |
+| Docker 한 줄 실행 (9/7) | `docker compose up`으로 db·web·worker 기동. node 빌드 스테이지 + python:3.13-slim 한 이미지(web·worker 명령만 다름), whitenoise로 프론트 서빙(nginx 없음), gunicorn, 진입 스크립트가 DB 대기→migrate→seed→관리자 생성(`ensure_superuser`, 검증기 통과 필수·멱등), media·logs named volume·비루트, worker `--reap-all`. 시크릿 fail-fast 유지 + `.env.example`에 생성 한 줄. 개발 환경(runserver+Vite)과 공존 | Dockerfile, docker/entrypoint.py, docker-compose.yml, .dockerignore, config/views.py `spa_index`, accounts/management/commands/ensure_superuser.py, docs/setup.md |
 
 ## 현황 요약 (2026-09-07 기준)
 
@@ -102,10 +103,10 @@
 - TST 8개: 완료 8
 - QLT 5개: 완료 5
 - **합계: 50개 중 완료 50** (9/2 판정 조정으로 47→49, DAR-008·SFR-010; 9/5 SFR-011 완료로 50 — decisions.md)
-- RFP 외 자체 개선 15항목(위 표): 접근 로그·핑거프린트·diff·비교 화면·대시보드·CI 게이트·오탐 관리·제외 경로·
-  테스트 태그·백그라운드 큐·Semgrep taint 룰·자체 taint 엔진 3단계 등
+- RFP 외 자체 개선 16항목(위 표): 접근 로그·핑거프린트·diff·비교 화면·대시보드·CI 게이트·오탐 관리·제외 경로·
+  테스트 태그·백그라운드 큐·Semgrep taint 룰·자체 taint 엔진 3단계·Docker 한 줄 실행 등
 - 룰: 100개(Python 22·C 13·Java 35·JS/TS 30), 49개 기준 중 39개 실탐지
-- 테스트: **430개 전부 통과** (accounts 56 · projects 51 · analysis 121 · catalog 189 · scripts 13 — 9/7 기준,
+- 테스트: **439개 전부 통과** (accounts 61 · projects 51 · analysis 123 · catalog 189 · scripts 13 · config 3 — 9/7 기준,
   실제 Semgrep을 도는 시험 22개는 `@tag('semgrep')`)
 - 프론트엔드: 7화면 완결 — 로그인 / 프로젝트 목록 / 프로젝트 상세(대시보드 포함) /
   실행 결과 상세(코드 조각·오염 경로·판정) / 실행 비교 / 카탈로그 / 사용자 관리. 관리자·일반 계정 브라우저 E2E로

@@ -15,7 +15,9 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
+
+from .views import spa_index
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -24,4 +26,8 @@ urlpatterns = [
     path('api/', include('projects.urls')),  # SFR-004, SFR-005, SFR-006
     path('api/', include('analysis.urls')),  # SFR-007, SFR-008, SFR-009
     path('api/', include('catalog.urls')),  # SFR-013, SFR-014, SFR-016, SFR-017
+    # 프론트 SPA 진입점 (Docker 한 줄 실행 — docs/decisions.md 2026-09-07). 반드시 마지막.
+    # api/·admin/·static/·assets/는 제외해 그 아래의 없는 경로가 index.html로 바뀌지 않는다
+    # (API 404는 404로 남아야 프론트 오류 처리가 맞다). 정적 자산은 whitenoise가 이보다 앞에서 서빙한다.
+    re_path(r'^(?!api/|admin/|static/|assets/)(?P<path>.*)$', spa_index, name='spa-index'),
 ]

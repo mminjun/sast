@@ -1,0 +1,22 @@
+# 이미지에 넣지 않는 것 (Dockerfile `COPY . ./` 기준)
+# 시크릿 — .env는 compose의 env_file로 컨테이너에 전달되지 컨테이너 이미지에 들어가서는 안 된다
+.env
+.env.*
+!.env.example
+# 로컬 환경·빌드 산출물 (프론트는 node 스테이지가 새로 빌드한다)
+venv/
+.venv/
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+*.py[cod]
+.git/
+.github/
+# 작업 영역·로그 — named volume이 대신한다
+media/
+logs/
+*.log
+# 시연 자료 — docs/*.md는 남긴다(catalog 시험 하나가 decisions.md와 룰 목록의 정합성을 검사한다)
+docs/images/
+dogfood/*.zip
+*.pen

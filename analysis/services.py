@@ -296,8 +296,14 @@ def stale_run_threshold(now=None):
     )
 
 
-def reap_stale_runs(now=None):
+def reap_stale_runs(now=None, *, all_running=False):
     """워커가 작업 중 죽어 RUNNING에 남은 실행을 FAILED로 정리한다. 정리한 건수를 돌려준다.
+
+    all_running=True면 나이와 무관하게 RUNNING 전부를 정리한다 — 부르는 쪽이 "지금 이 프로세스가
+    유일한 워커"임을 아는 경우에만(컨테이너 재시작: analysis_worker --reap-all). 컨테이너가 실행 도중
+    내려가면 run은 RUNNING, 큐 행도 RUNNING으로 남아 다시 집어 가지 않는데, 나이 임계(타임아웃+여유)만
+    쓰면 다음 기동에서 "아직 젊어서" 정리되지 않고 15분 뒤 또 재기동해야 풀린다
+    (docs/decisions.md 2026-09-07 Docker). 워커가 여럿이면 다른 워커의 정상 실행까지 실패로 만드므로 금지.
 
     워커 프로세스가 작업 도중 종료되면(강제 종료, 재시작) 큐 쪽 작업 행은 남지만 run은
     RUNNING에 고착되고, 실행 버튼은 PENDING·FAILED에만 보여 사용자가 복구할 길이 없다.
@@ -307,10 +313,10 @@ def reap_stale_runs(now=None):
     QUEUED는 건드리지 않는다 — 워커 1개에 여러 건이 밀리면 정상 대기가 임계보다 길 수 있고,
     큐에 작업이 남아 있는 한 워커가 결국 집어 간다.
     """
-    return AnalysisRun.objects.filter(
-        status=AnalysisStatus.RUNNING,
-        started_at__lt=stale_run_threshold(now),
-    ).update(
+    stale = AnalysisRun.objects.filter(status=AnalysisStatus.RUNNING)
+    if not all_running:
+        stale = stale.filter(started_at__lt=stale_run_threshold(now))
+    return stale.update(
         status=AnalysisStatus.FAILED,
         error_message=STALE_RUN_MESSAGE,
         finished_at=now or timezone.now(),
